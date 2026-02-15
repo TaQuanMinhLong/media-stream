@@ -204,11 +204,15 @@ export class VideoPlayer {
   }
 
   /**
-   * Select the best frame for currentTime; update displayFrame; always re-render.
+   * Select the best frame for currentTime; update displayFrame; render only new frames.
    *
-   * Re-rendering displayFrame every tick (even when unchanged) prevents black
-   * flashes when the canvas is resized or fullscreen is toggled, because WebGPU's
-   * GPUExternalTexture from importExternalTexture expires after each task.
+   * We only call render() when the displayFrame actually changes. When there's
+   * no new frame, we skip getCurrentTexture() entirely — the canvas automatically
+   * keeps presenting its last submitted frame. This prevents the black flashes
+   * during fullscreen/resize transitions that happened when re-rendering every
+   * tick (importExternalTexture on a kept-alive VideoFrame intermittently
+   * produces an expired 0×0 texture during CSS transitions; the render pass's
+   * loadOp:"clear" then wipes the canvas to black).
    */
   private drainFrameForDisplay(): void {
     const currentTimeUs = this.currentTime * 1_000_000;
@@ -231,29 +235,18 @@ export class VideoPlayer {
       if (this.seekTargetUs >= 0) {
         if (best.timestampUs < this.seekTargetUs - 200_000) {
           best.frame.close();
-          // Don't update displayFrame — keep showing black during seek-catch-up
-          // (displayFrame was already nulled in seek()).
-        } else {
-          this.seekTargetUs = -1; // Caught up — resume normal rendering
-          // Replace the display frame
-          if (this.displayFrame) {
-            try { this.displayFrame.close(); } catch { /* already closed */ }
-          }
-          this.displayFrame = best.frame;
+          return; // Don't update displayFrame or render
         }
-      } else {
-        // Normal playback — promote best to display
-        if (this.displayFrame) {
-          try { this.displayFrame.close(); } catch { /* already closed */ }
-        }
-        this.displayFrame = best.frame;
+        this.seekTargetUs = -1; // Caught up — resume normal rendering
       }
-    }
-
-    // Always re-render the current display frame (handles canvas resize).
-    if (this.displayFrame) {
+      // Replace the display frame and render the new one
+      if (this.displayFrame) {
+        try { this.displayFrame.close(); } catch { /* already closed */ }
+      }
+      this.displayFrame = best.frame;
       this.render(this.displayFrame);
     }
+    // If no new frame: do nothing. The canvas keeps its last presented content.
   }
 
   public play(): void {
