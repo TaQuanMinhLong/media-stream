@@ -11,7 +11,7 @@ export function useWebGPU(
       gpuContext: GPUCanvasContext,
       gpuPipeline: GPURenderPipeline,
       gpuSampler: GPUSampler,
-    ) => void;
+    ) => void | Promise<void>;
   },
 ) {
   const gpuDevice = shallowRef<GPUDevice | null>(null);
@@ -64,7 +64,12 @@ export function useWebGPU(
       minFilter: "linear",
     });
 
-    options?.onReady?.(gpuDevice.value, gpuContext.value, gpuPipeline.value, gpuSampler.value);
+    await options?.onReady?.(
+      gpuDevice.value,
+      gpuContext.value,
+      gpuPipeline.value,
+      gpuSampler.value,
+    );
   });
 
   // Re-configure if the device changes or canvas mounting flickers
