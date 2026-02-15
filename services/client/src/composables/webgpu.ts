@@ -5,6 +5,14 @@ import { onMounted, shallowRef, toValue } from "vue";
 export function useWebGPU(
   canvasElement: MaybeComputedElementRef<HTMLCanvasElement | null | undefined>,
   shaderCode: string,
+  options?: {
+    onReady?: (
+      gpuDevice: GPUDevice,
+      gpuContext: GPUCanvasContext,
+      gpuPipeline: GPURenderPipeline,
+      gpuSampler: GPUSampler,
+    ) => void;
+  },
 ) {
   const gpuDevice = shallowRef<GPUDevice | null>(null);
   const gpuContext = shallowRef<GPUCanvasContext | null>(null);
@@ -34,6 +42,7 @@ export function useWebGPU(
     if (!canvas) return console.error("Failed to get canvas element");
 
     gpuContext.value = canvas.getContext("webgpu");
+    if (!gpuContext.value) return console.error("Failed to get WebGPU context");
 
     configureCanvas();
 
@@ -54,6 +63,8 @@ export function useWebGPU(
       magFilter: "linear",
       minFilter: "linear",
     });
+
+    options?.onReady?.(gpuDevice.value, gpuContext.value, gpuPipeline.value, gpuSampler.value);
   });
 
   // Re-configure if the device changes or canvas mounting flickers
