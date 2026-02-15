@@ -1,0 +1,11 @@
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "editor.defaultFormatter": "biomejs.biome",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.biome": "explicit"
+  },
+  "[wgsl]": {
+    "editor.defaultFormatter": "wgsl-analyzer.wgsl-analyzer"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "media-stream",
+  "version": "0.0.1",
+  "workspaces": ["services/*"],
+  "scripts": {
+    "dev:server": "bun --cwd services/server dev"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.14"
+  }
+}
