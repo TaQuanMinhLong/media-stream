@@ -1,13 +1,25 @@
 import type { MaybeComputedElementRef } from "@vueuse/core";
 import type { MediaAssetMetadata } from "../types/media-metadata";
-import { ref, shallowRef, toValue } from "vue";
+import { ref, shallowRef, toValue, watch } from "vue";
+import MediaWorkerURL from "../media-worker?worker&url";
 import { AudioPlayer } from "../models/audio-player";
-import { VideoPlayer } from "../models/video-player";
-import shaderCode from "../shaders/video.wgsl?raw";
 import { formatSegmentUrl, timeToSegmentIndex } from "../utils/seek-index";
-import { useWebGPU } from "./webgpu";
 
 const DEFAULT_DECRYPT = (buf: ArrayBuffer): Promise<ArrayBuffer> => Promise.resolve(buf);
+
+type WorkerStateUpdate = {
+  type: "STATE_UPDATE";
+  currentTime: number;
+  isPlaying: boolean;
+  bufferedEnd: number;
+  isBuffering: boolean;
+};
+type WorkerReady = { type: "READY" };
+type WorkerError = { type: "ERROR"; message: string };
+
+function isStateUpdate(d: WorkerStateUpdate | WorkerReady | WorkerError): d is WorkerStateUpdate {
+  return d.type === "STATE_UPDATE";
+}
 
 export function useMediaPlayer(
   canvasRef: MaybeComputedElementRef<HTMLCanvasElement | null | undefined>,
@@ -21,7 +33,8 @@ export function useMediaPlayer(
   const { assetId, decrypt = DEFAULT_DECRYPT } = options;
   const metadataUrl = options.metadataUrl ?? `/media/${assetId}/metadata.json`;
 
-  const videoPlayer = shallowRef<VideoPlayer | null>(null);
+  const workerRef = shallowRef<Worker | null>(null);
+  const playerReady = ref(false);
   const audioPlayer = shallowRef<AudioPlayer | null>(null);
   const currentTime = ref(0);
   const isPlaying = ref(false);
@@ -30,7 +43,7 @@ export function useMediaPlayer(
   const duration = ref(0);
   const metadata = shallowRef<MediaAssetMetadata | null>(null);
 
-  // UI: controls visibility (from useVideoController)
+  // UI: controls visibility
   const showControls = ref(true);
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
   function resetHideTimer() {
@@ -41,7 +54,6 @@ export function useMediaPlayer(
     }, 3000);
   }
 
-  // Internal: fetch state (not exposed to template)
   let fetchAbortController = new AbortController();
   const videoSegIdx = ref(1);
   const audioSegIdx = ref(1);
@@ -53,22 +65,19 @@ export function useMediaPlayer(
   let tickScheduled = false;
 
   function tick(): void {
-    const vp = videoPlayer.value;
-    if (!vp) {
+    const worker = workerRef.value;
+    if (!worker || !playerReady.value) {
       if (tickScheduled) requestAnimationFrame(tick);
       return;
     }
+    // Drive the worker's render loop from the main thread's rAF for vsync alignment
+    worker.postMessage({ type: "TICK" });
     try {
-      currentTime.value = vp.tick();
-      bufferedEnd.value = vp.bufferedEndSec;
-      isBuffering.value = vp.isBuffering;
-      isPlaying.value = vp.state === "playing";
-
-      // Pre-buffering
+      // Pre-buffering: refs are updated by worker STATE_UPDATE
       if (hasInitialized.value && !isSeeking.value && metadata.value) {
         const { video: vMeta, audio: aMeta } = metadata.value;
         const time = currentTime.value;
-        const vBuf = vp.bufferedEndSec ?? 0;
+        const vBuf = bufferedEnd.value ?? 0;
         const aBuf = audioPlayer.value?.bufferedEndSec ?? 0;
         if (vBuf - time < 10 && !isFetchingVideo.value && videoSegIdx.value <= vMeta.segmentCount) {
           fetchVideoSegment();
@@ -78,7 +87,7 @@ export function useMediaPlayer(
         }
       }
     } catch (e) {
-      console.warn("Video tick error:", e);
+      console.warn("Pre-buffer tick error:", e);
     }
     if (tickScheduled) requestAnimationFrame(tick);
   }
@@ -89,18 +98,53 @@ export function useMediaPlayer(
     requestAnimationFrame(tick);
   }
 
-  const gpu = useWebGPU(canvasRef, shaderCode, {
-    onReady: (gpuDevice, gpuContext, gpuPipeline, gpuSampler) => {
-      const vp = new VideoPlayer(gpuDevice, gpuContext, gpuPipeline, gpuSampler);
-      const ap = new AudioPlayer(() => vp.currentTime);
-      videoPlayer.value = vp;
-      audioPlayer.value = ap;
-      startClockWhenReady();
+  watch(
+    () => toValue(canvasRef),
+    (canvas) => {
+      if (!canvas || !(canvas instanceof HTMLCanvasElement) || workerRef.value) return;
+      let offscreen: OffscreenCanvas;
+      try {
+        offscreen = canvas.transferControlToOffscreen();
+      } catch (e) {
+        console.error("transferControlToOffscreen failed:", e);
+        return;
+      }
+      const worker = new Worker(MediaWorkerURL, { type: "module" });
+      workerRef.value = worker;
+
+      worker.onmessage = (event: MessageEvent<WorkerStateUpdate | WorkerReady | WorkerError>) => {
+        const data = event.data;
+        if (data.type === "READY") {
+          playerReady.value = true;
+          const ap = new AudioPlayer(() => currentTime.value);
+          audioPlayer.value = ap;
+          return;
+        }
+        if (data.type === "ERROR") {
+          console.error("Media worker error:", data.message);
+          return;
+        }
+        if (isStateUpdate(data)) {
+          currentTime.value = data.currentTime;
+          isPlaying.value = data.isPlaying;
+          bufferedEnd.value = data.bufferedEnd;
+          isBuffering.value = data.isBuffering;
+        }
+      };
+
+      worker.onerror = (e) => {
+        console.error("Media worker error", e);
+      };
+
+      worker.postMessage({ type: "INIT_CANVAS", canvas: offscreen }, [offscreen]);
     },
-  });
+    { flush: "post" },
+  );
 
   function initVideo(initBuffer: ArrayBuffer): void {
-    videoPlayer.value?.setConfiguration(initBuffer);
+    const worker = workerRef.value;
+    if (!worker) return;
+    worker.postMessage({ type: "INIT_VIDEO", buffer: initBuffer }, [initBuffer]);
   }
 
   function initAudio(initBuffer: ArrayBuffer): void {
@@ -108,7 +152,9 @@ export function useMediaPlayer(
   }
 
   function feedVideoSegment(buffer: ArrayBuffer): void {
-    videoPlayer.value?.feedSegment(buffer);
+    const worker = workerRef.value;
+    if (!worker) return;
+    worker.postMessage({ type: "FEED_VIDEO_SEGMENT", buffer }, [buffer]);
   }
 
   function feedAudioSegment(buffer: ArrayBuffer): void {
@@ -182,7 +228,7 @@ export function useMediaPlayer(
 
   async function initMetadata(): Promise<void> {
     if (hasInitialized.value) return;
-    if (!videoPlayer.value) {
+    if (!playerReady.value) {
       console.warn("Player not ready yet (WebGPU initializing). Click play again in a moment.");
       return;
     }
@@ -207,22 +253,22 @@ export function useMediaPlayer(
   }
 
   function seek(time: number): boolean {
-    const vp = videoPlayer.value;
+    const worker = workerRef.value;
     const ap = audioPlayer.value;
-    if (!vp) return false;
-    const wasPlaying = vp.state === "playing";
-    if (wasPlaying) vp.pause();
-    vp.seek(time);
+    if (!worker) return false;
+    const wasPlaying = isPlaying.value;
+    worker.postMessage({ type: "PAUSE" });
+    worker.postMessage({ type: "SEEK", time });
     ap?.seek(time);
     currentTime.value = time;
     return wasPlaying;
   }
 
   function resumeAfterSeek(): void {
-    const vp = videoPlayer.value;
+    const worker = workerRef.value;
     const ap = audioPlayer.value;
-    if (!vp) return;
-    vp.play();
+    if (!worker) return;
+    worker.postMessage({ type: "PLAY" });
     ap?.play();
     isPlaying.value = true;
   }
@@ -230,7 +276,9 @@ export function useMediaPlayer(
   async function handleSeek(time: number): Promise<void> {
     const meta = metadata.value;
     if (!meta) return;
-    isBuffering.value = true;
+    // Don't set isBuffering here — the canvas retains the last rendered frame
+    // (displayFrame is kept alive during seek), so no spinner is needed.
+    // If real buffering occurs, the worker's STATE_UPDATE will set it naturally.
     isSeeking.value = true;
     try {
       fetchAbortController.abort();
@@ -247,10 +295,9 @@ export function useMediaPlayer(
       const wasPlaying = seek(time);
       await Promise.all([fetchVideoSegment(), fetchAudioSegment()]);
 
-      const vp = videoPlayer.value;
-      const ap = audioPlayer.value;
-      const needMoreVideo = vp && vp.bufferedEndSec < time + 0.5 && videoSegIdx.value <= vCount;
-      const needMoreAudio = ap && ap.bufferedEndSec < time + 0.5 && audioSegIdx.value <= aCount;
+      const needMoreVideo = bufferedEnd.value < time + 0.5 && videoSegIdx.value <= vCount;
+      const needMoreAudio =
+        (audioPlayer.value?.bufferedEndSec ?? 0) < time + 0.5 && audioSegIdx.value <= aCount;
       if (needMoreVideo || needMoreAudio) {
         await Promise.all([
           needMoreVideo ? fetchVideoSegment() : Promise.resolve(),
@@ -260,27 +307,24 @@ export function useMediaPlayer(
       if (wasPlaying) resumeAfterSeek();
     } finally {
       isSeeking.value = false;
-      isBuffering.value = false;
     }
   }
 
   async function togglePlay(): Promise<void> {
     await initMetadata();
-    if (!videoPlayer.value) return;
+    if (!playerReady.value || !workerRef.value) return;
     if (videoSegIdx.value === 1) {
       await Promise.all([fetchVideoSegment(), fetchAudioSegment()]);
     }
-    const vp = videoPlayer.value;
-    const ap = audioPlayer.value;
-    if (!vp) return;
-    if (vp.state === "playing") {
-      vp.pause();
-      ap?.pause();
+    if (isPlaying.value) {
+      workerRef.value.postMessage({ type: "PAUSE" });
+      audioPlayer.value?.pause();
     } else {
-      vp.play();
-      ap?.play();
+      workerRef.value.postMessage({ type: "PLAY" });
+      audioPlayer.value?.play();
     }
-    isPlaying.value = vp.state === "playing";
+    // STATE_UPDATE from worker will sync isPlaying; optimistic update for UI
+    isPlaying.value = !isPlaying.value;
   }
 
   function setVolume(volume: number): void {
@@ -305,9 +349,19 @@ export function useMediaPlayer(
     fetchAbortController.abort();
   }
 
+  function terminateWorker(): void {
+    const worker = workerRef.value;
+    if (worker) {
+      worker.terminate();
+      workerRef.value = null;
+    }
+    playerReady.value = false;
+    audioPlayer.value = null;
+  }
+
   return {
-    gpu,
-    videoPlayer,
+    workerRef,
+    playerReady,
     audioPlayer,
     currentTime,
     isPlaying,
@@ -325,5 +379,6 @@ export function useMediaPlayer(
     toggleFullscreen,
     startClockWhenReady,
     abortFetch,
+    terminateWorker,
   };
 }

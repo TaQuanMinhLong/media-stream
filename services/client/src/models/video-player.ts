@@ -206,15 +206,13 @@ export class VideoPlayer {
   }
 
   /**
-   * Select the best frame for currentTime; update displayFrame; render only new frames.
+   * Select the best frame for currentTime; update displayFrame; always re-render.
    *
-   * We only call render() when the displayFrame actually changes. When there's
-   * no new frame, we skip getCurrentTexture() entirely — the canvas automatically
-   * keeps presenting its last submitted frame. This prevents the black flashes
-   * during fullscreen/resize transitions that happened when re-rendering every
-   * tick (importExternalTexture on a kept-alive VideoFrame intermittently
-   * produces an expired 0×0 texture during CSS transitions; the render pass's
-   * loadOp:"clear" then wipes the canvas to black).
+   * We re-render the current displayFrame on every tick, even when there is no
+   * new decoded frame. This ensures the canvas surface has content after compositor
+   * reconfiguration during resize or fullscreen transitions. With worker rendering,
+   * VideoFrames are isolated from CSS transitions so importExternalTexture on a
+   * kept-alive frame is safe (the old expired-texture issue was main-thread-specific).
    */
   private drainFrameForDisplay(): void {
     const currentTimeUs = this.currentTime * 1_000_000;
@@ -237,18 +235,30 @@ export class VideoPlayer {
       if (this.seekTargetUs >= 0) {
         if (best.timestampUs < this.seekTargetUs - 200_000) {
           best.frame.close();
-          return; // Don't update displayFrame or render
+          // Still re-render displayFrame below if available
+          best = null;
+        } else {
+          this.seekTargetUs = -1; // Caught up — resume normal rendering
         }
-        this.seekTargetUs = -1; // Caught up — resume normal rendering
       }
-      // Replace the display frame and render the new one
+    }
+
+    if (best) {
+      // Replace the display frame with the new one
       if (this.displayFrame) {
         try { this.displayFrame.close(); } catch { /* already closed */ }
       }
       this.displayFrame = best.frame;
+    }
+
+    // Always re-render the current displayFrame on every tick.
+    // With worker rendering, VideoFrames are isolated from CSS transitions,
+    // so importExternalTexture on a kept-alive frame is safe. This ensures
+    // the canvas surface always has content even after compositor reconfiguration
+    // during resize/fullscreen transitions.
+    if (this.displayFrame) {
       this.render(this.displayFrame);
     }
-    // If no new frame: do nothing. The canvas keeps its last presented content.
   }
 
   public play(): void {
@@ -267,11 +277,10 @@ export class VideoPlayer {
     this.playheadOffset = time;
     this.seekTargetUs = time * 1_000_000;
 
-    // Close the display frame so we don't keep rendering stale content
-    if (this.displayFrame) {
-      try { this.displayFrame.close(); } catch { /* already closed */ }
-      this.displayFrame = null;
-    }
+    // Keep displayFrame alive so the canvas retains the last rendered content
+    // until a new frame from the seek target replaces it. This prevents the
+    // black flash that occurred when displayFrame was closed and the seek-skip
+    // logic delayed the first valid render by 300-400ms.
 
     // Clear all queues
     this.pendingSamples.length = 0;

@@ -37,6 +37,7 @@ const {
   toggleFullscreen,
   startClockWhenReady,
   abortFetch,
+  terminateWorker,
 } = useMediaPlayer(canvasRef, containerRef, {
   assetId: props.assetId,
   metadataUrl: props.metadataUrl,
@@ -50,6 +51,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   abortFetch();
+  terminateWorker();
 });
 </script>
 
