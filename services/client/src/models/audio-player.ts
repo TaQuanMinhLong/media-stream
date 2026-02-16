@@ -1,5 +1,4 @@
-import { decrypt } from "../crypto/decrypt";
-import { parseAudioInit, parseAudioMedia } from "../parsers/fmp4-audio";
+import { Fmp4AudioParser } from "../parsers/fmp4-audio";
 
 export class AudioPlayer {
   private context: AudioContext;
@@ -19,6 +18,8 @@ export class AudioPlayer {
 
   /** Stored codec config so we can recreate the decoder on seek. */
   private lastCodecConfig: AudioDecoderConfig | null = null;
+
+  private readonly audioParser = new Fmp4AudioParser();
 
   /**
    * After seek, audio chunks before this time are skipped.
@@ -41,7 +42,7 @@ export class AudioPlayer {
    */
   public setConfiguration(initBuffer: ArrayBuffer): void {
     try {
-      const result = parseAudioInit(initBuffer);
+      const result = this.audioParser.parseInit(initBuffer);
       if (!result) return;
       if (typeof AudioDecoder === "undefined") return;
       const { sampleRate, numberOfChannels, timescale } = result;
@@ -138,15 +139,14 @@ export class AudioPlayer {
   }
 
   /**
-   * Feed decrypted segment bytes. Decrypt is called internally (mock/WASM).
+   * Feed decrypted segment bytes. Caller must decrypt before passing.
    * Audio scheduling uses absolute container timestamps (no segmentStartSec needed).
    */
-  public async feedSegment(data: ArrayBuffer): Promise<void> {
-    const decrypted = await decrypt(data);
+  public feedSegment(data: ArrayBuffer): void {
     if (this.decoder?.state !== "configured") {
       return;
     }
-    const result = parseAudioMedia(decrypted, this.timescale);
+    const result = this.audioParser.parseMedia(data, this.timescale);
     if (!result) return;
     // Track actual audio buffered end from content timestamps
     const lastSample = result.samples[result.samples.length - 1];

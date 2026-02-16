@@ -3,7 +3,7 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
-    "types": ["vite/client", "@webgpu/types"],
+    "types": ["vite/client", "@webgpu/types", "bun"],
 
     /* Linting */
     "strict": true,
@@ -13,5 +13,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "src/**/*.test.ts"]
 }

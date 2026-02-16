@@ -26,7 +26,6 @@ const TFHD_BASE_DATA_OFFSET = 0x000001;
 const TFHD_SAMPLE_DESC_INDEX = 0x000002;
 const TFHD_DEFAULT_DURATION = 0x000008;
 const TFHD_DEFAULT_SIZE = 0x000010;
-const TFHD_DEFAULT_FLAGS = 0x000020;
 
 function readU32(dv: DataView, offset: number): number {
   return dv.getUint32(offset, false);
@@ -352,4 +351,15 @@ export function parseAudioMedia(
   }
 
   return { baseDecodeTimeUs, samples };
+}
+
+/** Class-based audio fMP4 parser; same interface can be implemented by Rust/WASM later. */
+export class Fmp4AudioParser {
+  parseInit(initBuffer: ArrayBuffer): AudioInitResult | null {
+    return parseAudioInit(initBuffer);
+  }
+
+  parseMedia(segmentBuffer: ArrayBuffer, timescale: number): AudioMediaResult | null {
+    return parseAudioMedia(segmentBuffer, timescale);
+  }
 }

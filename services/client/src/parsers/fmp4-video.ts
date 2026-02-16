@@ -398,3 +398,14 @@ export function parseVideoMedia(
 
   return { baseDecodeTimeUs, samples };
 }
+
+/** Class-based video fMP4 parser; same interface can be implemented by Rust/WASM later. */
+export class Fmp4VideoParser {
+  parseInit(initBuffer: ArrayBuffer): VideoInitResult | null {
+    return parseVideoInit(initBuffer);
+  }
+
+  parseMedia(segmentBuffer: ArrayBuffer, timescale: number): VideoMediaResult | null {
+    return parseVideoMedia(segmentBuffer, timescale);
+  }
+}

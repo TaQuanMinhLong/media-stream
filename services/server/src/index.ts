@@ -18,6 +18,20 @@ function safeResolve(...segments: string[]) {
 new Elysia()
   .get("/", () => ({ status: "Media Server Ready" }))
 
+  // MATCHES: /media/sample/metadata.json
+  .get("/media/:asset/metadata.json", async ({ params, set }) => {
+    const { asset } = params;
+    const filePath = safeResolve(asset, "metadata.json");
+    const fileRef = Bun.file(filePath);
+    if (!(await fileRef.exists())) {
+      set.status = 404;
+      return "Metadata not found";
+    }
+    set.headers["Content-Type"] = "application/json";
+    set.headers["Cache-Control"] = "public, max-age=60";
+    return fileRef;
+  })
+
   // MATCHES: /media/sample/chunk-0-00001.m4s
   .get("/media/:asset/:file", async ({ params, set }) => {
     const { asset, file } = params;

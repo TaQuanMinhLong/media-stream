@@ -1,5 +1,5 @@
 import type { VideoSample } from "../parsers/fmp4-video";
-import { parseVideoInit, parseVideoMedia } from "../parsers/fmp4-video";
+import { Fmp4VideoParser } from "../parsers/fmp4-video";
 
 export type PlayerState = "loading" | "playing" | "paused" | "buffering";
 
@@ -50,6 +50,8 @@ export class VideoPlayer {
   /** Stored codec config so we can recreate the decoder on seek. */
   private lastCodecConfig: VideoDecoderConfig | null = null;
 
+  private readonly videoParser = new Fmp4VideoParser();
+
   constructor(
     device: GPUDevice,
     context: GPUCanvasContext,
@@ -81,7 +83,7 @@ export class VideoPlayer {
    */
   public setConfiguration(initBuffer: ArrayBuffer): void {
     try {
-      const result = parseVideoInit(initBuffer);
+      const result = this.videoParser.parseInit(initBuffer);
       if (!result) return;
       this.timescale = result.timescale;
       this.lastCodecConfig = {
@@ -104,7 +106,7 @@ export class VideoPlayer {
   public feedSegment(mediaBuffer: ArrayBuffer): void {
     try {
       if (this.decoder.state !== "configured") return;
-      const result = parseVideoMedia(mediaBuffer, this.timescale);
+      const result = this.videoParser.parseMedia(mediaBuffer, this.timescale);
       if (!result) return;
       // Track actual buffered end time from the last sample
       const last = result.samples[result.samples.length - 1];

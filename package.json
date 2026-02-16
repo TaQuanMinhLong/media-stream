@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "workspaces": ["services/*"],
   "scripts": {
-    "dev:server": "bun --cwd services/server dev"
+    "dev:server": "bun --cwd services/server dev",
+    "test:client": "bun run --cwd services/client test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.15"
