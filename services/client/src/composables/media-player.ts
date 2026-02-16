@@ -1,24 +1,19 @@
 import type { MaybeComputedElementRef } from "@vueuse/core";
 import type { MediaAssetMetadata } from "../types/media-metadata";
-import { ref, shallowRef, toValue, watch } from "vue";
+import init, { MediaClient } from "@media-stream/client";
+import wasmUrl from "@media-stream/client/media_client_bg.wasm?url";
+import { onMounted, ref, shallowRef, toValue } from "vue";
 import MediaWorkerURL from "../media-worker?worker&url";
-import { AudioPlayer } from "../models/audio-player";
 import { formatSegmentUrl, timeToSegmentIndex } from "../utils/seek-index";
 
 const DEFAULT_DECRYPT = (buf: ArrayBuffer): Promise<ArrayBuffer> => Promise.resolve(buf);
 
-type WorkerStateUpdate = {
-  type: "STATE_UPDATE";
-  currentTime: number;
-  isPlaying: boolean;
-  bufferedEnd: number;
-  isBuffering: boolean;
-};
-type WorkerReady = { type: "READY" };
-type WorkerError = { type: "ERROR"; message: string };
-
-function isStateUpdate(d: WorkerStateUpdate | WorkerReady | WorkerError): d is WorkerStateUpdate {
-  return d.type === "STATE_UPDATE";
+let mediaClient: MediaClient | null = null;
+async function getMediaClient(): Promise<MediaClient> {
+  if (mediaClient) return mediaClient;
+  await init({ module_or_path: wasmUrl });
+  mediaClient = new MediaClient();
+  return mediaClient;
 }
 
 export function useMediaPlayer(
@@ -33,13 +28,13 @@ export function useMediaPlayer(
   const { assetId, decrypt = DEFAULT_DECRYPT } = options;
   const metadataUrl = options.metadataUrl ?? `/media/${assetId}/metadata.json`;
 
-  const workerRef = shallowRef<Worker | null>(null);
+  const clientRef = shallowRef<MediaClient | null>(null);
   const playerReady = ref(false);
-  const audioPlayer = shallowRef<AudioPlayer | null>(null);
   const currentTime = ref(0);
   const isPlaying = ref(false);
   const isBuffering = ref(false);
   const bufferedEnd = ref(0);
+  const audioBufferedEnd = ref(0);
   const duration = ref(0);
   const metadata = shallowRef<MediaAssetMetadata | null>(null);
 
@@ -65,20 +60,18 @@ export function useMediaPlayer(
   let tickScheduled = false;
 
   function tick(): void {
-    const worker = workerRef.value;
-    if (!worker || !playerReady.value) {
+    const client = clientRef.value;
+    if (!client || !playerReady.value) {
       if (tickScheduled) requestAnimationFrame(tick);
       return;
     }
-    // Drive the worker's render loop from the main thread's rAF for vsync alignment
-    worker.postMessage({ type: "TICK" });
+    client.tick();
     try {
-      // Pre-buffering: refs are updated by worker STATE_UPDATE
       if (hasInitialized.value && !isSeeking.value && metadata.value) {
         const { video: vMeta, audio: aMeta } = metadata.value;
         const time = currentTime.value;
         const vBuf = bufferedEnd.value ?? 0;
-        const aBuf = audioPlayer.value?.bufferedEndSec ?? 0;
+        const aBuf = audioBufferedEnd.value ?? 0;
         if (vBuf - time < 10 && !isFetchingVideo.value && videoSegIdx.value <= vMeta.segmentCount) {
           fetchVideoSegment();
         }
@@ -98,67 +91,88 @@ export function useMediaPlayer(
     requestAnimationFrame(tick);
   }
 
-  watch(
-    () => toValue(canvasRef),
-    (canvas) => {
-      if (!canvas || !(canvas instanceof HTMLCanvasElement) || workerRef.value) return;
-      let offscreen: OffscreenCanvas;
-      try {
-        offscreen = canvas.transferControlToOffscreen();
-      } catch (e) {
-        console.error("transferControlToOffscreen failed:", e);
-        return;
-      }
-      const worker = new Worker(MediaWorkerURL, { type: "module" });
-      workerRef.value = worker;
-
-      worker.onmessage = (event: MessageEvent<WorkerStateUpdate | WorkerReady | WorkerError>) => {
-        const data = event.data;
-        if (data.type === "READY") {
-          playerReady.value = true;
-          const ap = new AudioPlayer(() => currentTime.value);
-          audioPlayer.value = ap;
-          return;
-        }
-        if (data.type === "ERROR") {
-          console.error("Media worker error:", data.message);
-          return;
-        }
-        if (isStateUpdate(data)) {
+  onMounted(async () => {
+    try {
+      const client = await getMediaClient();
+      client.setOnStateUpdate(
+        (data: {
+          currentTime: number;
+          isPlaying: boolean;
+          bufferedEnd: number;
+          audioBufferedEnd: number;
+          isBuffering: boolean;
+        }) => {
           currentTime.value = data.currentTime;
           isPlaying.value = data.isPlaying;
           bufferedEnd.value = data.bufferedEnd;
+          audioBufferedEnd.value = data.audioBufferedEnd ?? 0;
           isBuffering.value = data.isBuffering;
-        }
-      };
+        },
+      );
+      client.setOnReady(() => {
+        playerReady.value = true;
+      });
+      client.setOnError((message: string) => {
+        console.error("Media worker error:", message);
+      });
+      client.initWorker(MediaWorkerURL);
 
-      worker.onerror = (e) => {
-        console.error("Media worker error", e);
-      };
+      const canvas = toValue(canvasRef);
+      if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
+        return console.error("Canvas not found");
+      }
+      const offscreen = await Promise.try(() => canvas.transferControlToOffscreen()).catch(
+        (err) => {
+          console.error("transferControlToOffscreen failed:", err);
+          return null;
+        },
+      );
+      if (!offscreen) return console.error("Failed to transfer control to offscreen");
+      client.initCanvas(offscreen);
+      clientRef.value = client;
+    } catch (e) {
+      console.error("Media client init failed:", e);
+    }
+  });
 
-      worker.postMessage({ type: "INIT_CANVAS", canvas: offscreen }, [offscreen]);
-    },
-    { flush: "post" },
-  );
-
-  function initVideo(initBuffer: ArrayBuffer): void {
-    const worker = workerRef.value;
-    if (!worker) return;
-    worker.postMessage({ type: "INIT_VIDEO", buffer: initBuffer }, [initBuffer]);
+  function initVideo(initBuffer: ArrayBuffer) {
+    const client = clientRef.value;
+    if (!client) return console.error("Client not found");
+    try {
+      client.initVideo(initBuffer);
+    } catch (e) {
+      console.warn("initVideo failed:", e);
+    }
   }
 
   function initAudio(initBuffer: ArrayBuffer): void {
-    audioPlayer.value?.setConfiguration(initBuffer);
+    const client = clientRef.value;
+    if (!client) return;
+    try {
+      client.initAudio(initBuffer);
+    } catch (e) {
+      console.warn("initAudio failed:", e);
+    }
   }
 
-  function feedVideoSegment(buffer: ArrayBuffer): void {
-    const worker = workerRef.value;
-    if (!worker) return;
-    worker.postMessage({ type: "FEED_VIDEO_SEGMENT", buffer }, [buffer]);
+  function feedVideoSegment(buffer: ArrayBuffer) {
+    const client = clientRef.value;
+    if (!client) return console.error("Client not found");
+    try {
+      client.feedVideoSegment(buffer);
+    } catch (e) {
+      console.warn("feedVideoSegment failed:", e);
+    }
   }
 
   function feedAudioSegment(buffer: ArrayBuffer): void {
-    audioPlayer.value?.feedSegment(buffer);
+    const client = clientRef.value;
+    if (!client) return;
+    try {
+      client.feedAudioSegment(buffer);
+    } catch (e) {
+      console.warn("feedAudioSegment failed:", e);
+    }
   }
 
   async function fetchVideoSegment(): Promise<void> {
@@ -245,40 +259,33 @@ export function useMediaPlayer(
         decrypt(aInit),
       ]);
       initVideo(decryptedVideoInit);
-      hasInitialized.value = true;
       initAudio(decryptedAudioInit);
+      hasInitialized.value = true;
     } catch (e) {
       console.error("Init failed", e);
     }
   }
 
   function seek(time: number): boolean {
-    const worker = workerRef.value;
-    const ap = audioPlayer.value;
-    if (!worker) return false;
+    const client = clientRef.value;
+    if (!client) return false;
     const wasPlaying = isPlaying.value;
-    worker.postMessage({ type: "PAUSE" });
-    worker.postMessage({ type: "SEEK", time });
-    ap?.seek(time);
+    client.pause();
+    client.seek(time);
     currentTime.value = time;
     return wasPlaying;
   }
 
   function resumeAfterSeek(): void {
-    const worker = workerRef.value;
-    const ap = audioPlayer.value;
-    if (!worker) return;
-    worker.postMessage({ type: "PLAY" });
-    ap?.play();
+    const client = clientRef.value;
+    if (!client) return;
+    client.play();
     isPlaying.value = true;
   }
 
   async function handleSeek(time: number): Promise<void> {
     const meta = metadata.value;
     if (!meta) return;
-    // Don't set isBuffering here — the canvas retains the last rendered frame
-    // (displayFrame is kept alive during seek), so no spinner is needed.
-    // If real buffering occurs, the worker's STATE_UPDATE will set it naturally.
     isSeeking.value = true;
     try {
       fetchAbortController.abort();
@@ -297,7 +304,7 @@ export function useMediaPlayer(
 
       const needMoreVideo = bufferedEnd.value < time + 0.5 && videoSegIdx.value <= vCount;
       const needMoreAudio =
-        (audioPlayer.value?.bufferedEndSec ?? 0) < time + 0.5 && audioSegIdx.value <= aCount;
+        (audioBufferedEnd.value ?? 0) < time + 0.5 && audioSegIdx.value <= aCount;
       if (needMoreVideo || needMoreAudio) {
         await Promise.all([
           needMoreVideo ? fetchVideoSegment() : Promise.resolve(),
@@ -312,27 +319,24 @@ export function useMediaPlayer(
 
   async function togglePlay(): Promise<void> {
     await initMetadata();
-    if (!playerReady.value || !workerRef.value) return;
+    if (!playerReady.value || !clientRef.value) return;
     if (videoSegIdx.value === 1) {
       await Promise.all([fetchVideoSegment(), fetchAudioSegment()]);
     }
     if (isPlaying.value) {
-      workerRef.value.postMessage({ type: "PAUSE" });
-      audioPlayer.value?.pause();
+      clientRef.value.pause();
     } else {
-      workerRef.value.postMessage({ type: "PLAY" });
-      audioPlayer.value?.play();
+      clientRef.value.play();
     }
-    // STATE_UPDATE from worker will sync isPlaying; optimistic update for UI
     isPlaying.value = !isPlaying.value;
   }
 
   function setVolume(volume: number): void {
-    audioPlayer.value?.setVolume(volume);
+    clientRef.value?.setVolume(volume);
   }
 
   function setMuted(muted: boolean): void {
-    audioPlayer.value?.setMuted(muted);
+    clientRef.value?.setMuted(muted);
   }
 
   function toggleFullscreen(): void {
@@ -350,19 +354,17 @@ export function useMediaPlayer(
   }
 
   function terminateWorker(): void {
-    const worker = workerRef.value;
-    if (worker) {
-      worker.terminate();
-      workerRef.value = null;
+    const client = clientRef.value;
+    if (client) {
+      client.terminate();
+      clientRef.value = null;
     }
     playerReady.value = false;
-    audioPlayer.value = null;
   }
 
   return {
-    workerRef,
+    workerRef: clientRef,
     playerReady,
-    audioPlayer,
     currentTime,
     isPlaying,
     isBuffering,

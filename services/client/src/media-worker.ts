@@ -1,69 +1,19 @@
 /**
- * Media worker: WebGPU + VideoDecoder + render on OffscreenCanvas.
- * Main thread transfers the canvas and sends init/segments/commands; worker posts STATE_UPDATE.
- * Rendering is driven by TICK messages from the main thread's requestAnimationFrame loop
- * to stay synchronized with the display's vsync.
+ * Media worker entry: load Rust WASM, create MediaWorker instance, run message loop.
+ * GPU is created in JS (adapter/device/context/pipeline/sampler) and passed to Rust via initWithGpu.
+ * All other messages (TICK, INIT_VIDEO, FEED_VIDEO_SEGMENT, PLAY, PAUSE, SEEK) are delegated to the Rust class.
  */
-import { VideoPlayer } from "./models/video-player";
+import init, { MediaWorker } from "@media-stream/worker";
+import wasmUrl from "@media-stream/worker/media_worker_bg.wasm?url";
 import shaderCode from "./shaders/video.wgsl?raw";
 
+await init({ module_or_path: wasmUrl });
+const mediaWorker = new MediaWorker();
+
 type InitCanvasMessage = { type: "INIT_CANVAS"; canvas: OffscreenCanvas };
-type InitVideoMessage = { type: "INIT_VIDEO"; buffer: ArrayBuffer };
-type FeedVideoSegmentMessage = { type: "FEED_VIDEO_SEGMENT"; buffer: ArrayBuffer };
-type PlayMessage = { type: "PLAY" };
-type PauseMessage = { type: "PAUSE" };
-type SeekMessage = { type: "SEEK"; time: number };
-type TickMessage = { type: "TICK" };
 
-type InMessage =
-  | InitCanvasMessage
-  | InitVideoMessage
-  | FeedVideoSegmentMessage
-  | PlayMessage
-  | PauseMessage
-  | SeekMessage
-  | TickMessage;
-
-function isInitCanvas(d: InMessage): d is InitCanvasMessage {
-  return d.type === "INIT_CANVAS";
-}
-function isInitVideo(d: InMessage): d is InitVideoMessage {
-  return d.type === "INIT_VIDEO";
-}
-function isFeedVideoSegment(d: InMessage): d is FeedVideoSegmentMessage {
-  return d.type === "FEED_VIDEO_SEGMENT";
-}
-function isSeek(d: InMessage): d is SeekMessage {
-  return d.type === "SEEK";
-}
-
-let videoPlayer: VideoPlayer | null = null;
-const STATE_UPDATE_INTERVAL = 4; // post state every N ticks (~15fps for UI)
-let tickCount = 0;
-
-function postState(): void {
-  if (!videoPlayer) return;
-  self.postMessage({
-    type: "STATE_UPDATE",
-    currentTime: videoPlayer.currentTime,
-    isPlaying: videoPlayer.state === "playing",
-    bufferedEnd: videoPlayer.bufferedEndSec,
-    isBuffering: videoPlayer.isBuffering,
-  });
-}
-
-function tick(): void {
-  if (!videoPlayer) return;
-  try {
-    videoPlayer.tick();
-    tickCount++;
-    if (tickCount >= STATE_UPDATE_INTERVAL) {
-      tickCount = 0;
-      postState();
-    }
-  } catch (e) {
-    console.warn("Worker tick error:", e);
-  }
+function isInitCanvas(d: unknown): d is InitCanvasMessage {
+  return typeof d === "object" && d !== null && (d as InitCanvasMessage).type === "INIT_CANVAS";
 }
 
 async function handleInitCanvas(canvas: OffscreenCanvas): Promise<void> {
@@ -106,40 +56,14 @@ async function handleInitCanvas(canvas: OffscreenCanvas): Promise<void> {
     minFilter: "linear",
   });
 
-  videoPlayer = new VideoPlayer(device, context, pipeline, sampler);
-  self.postMessage({ type: "READY" });
-  postState();
+  mediaWorker.initWithGpu(device, context, pipeline, sampler);
 }
 
-self.onmessage = (event: MessageEvent<InMessage>) => {
+self.onmessage = (event: MessageEvent) => {
   const data = event.data;
   if (isInitCanvas(data)) {
     handleInitCanvas(data.canvas);
     return;
   }
-  if (data.type === "TICK") {
-    tick();
-    return;
-  }
-  if (!videoPlayer) return;
-  if (isInitVideo(data)) {
-    videoPlayer.setConfiguration(data.buffer);
-    return;
-  }
-  if (isFeedVideoSegment(data)) {
-    videoPlayer.feedSegment(data.buffer);
-    return;
-  }
-  if (data.type === "PLAY") {
-    videoPlayer.play();
-    return;
-  }
-  if (data.type === "PAUSE") {
-    videoPlayer.pause();
-    return;
-  }
-  if (isSeek(data)) {
-    videoPlayer.seek(data.time);
-    return;
-  }
+  mediaWorker.handleMessage(data);
 };

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
 import { useMediaPlayer } from "../composables/media-player";
-import { decrypt } from "../crypto/decrypt";
 import VideoControllerRoot from "./video-controller-root.vue";
 import VideoFullscreenToggle from "./video-fullscreen-toggle.vue";
 import VideoPlayToggle from "./video-play-toggle.vue";
@@ -41,7 +40,6 @@ const {
 } = useMediaPlayer(canvasRef, containerRef, {
   assetId: props.assetId,
   metadataUrl: props.metadataUrl,
-  decrypt,
 });
 
 onMounted(() => {

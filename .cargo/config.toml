@@ -1,0 +1,36 @@
+[cargo-new]
+vcs = "none"
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "--cfg",
+    "web_sys_unstable_apis",
+    "--cfg",
+    "getrandom_backend=\"wasm_js\"",
+]
+
+# Currently disable for later if we really need these flags
+# [unstable]
+# build-std = ["std", "panic_abort"]
+
+# [target.wasm32-unknown-unknown]
+# rustflags = [
+#     "-C",
+#     "target-feature=+atomics,+bulk-memory,+mutable-globals",
+#     "-C",
+#     "link-args=--shared-memory",
+#     "-C",
+#     "link-args=--max-memory=2147483648",
+#     "-C",
+#     "link-args=--import-memory",
+#     "-C",
+#     "link-args=--export=__wasm_init_tls",
+#     "-C",
+#     "link-args=--export=__tls_size",
+#     "-C",
+#     "link-args=--export=__tls_align",
+#     "-C",
+#     "link-args=--export=__tls_base",
+#     "--cfg",
+#     "getrandom_backend=\"wasm_js\"",
+# ]

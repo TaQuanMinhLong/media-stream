@@ -1,0 +1,87 @@
+[package]
+name = "media-worker"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+media-core.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+console_error_panic_hook.workspace = true
+js-sys.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = [
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "AudioContext",
+  "AudioData",
+  "AudioDataCopyToOptions",
+  "AudioDecoder",
+  "AudioDecoderConfig",
+  "AudioDecoderInit",
+  "AudioDestinationNode",
+  "AudioNode",
+  "AudioParam",
+  "CodecState",
+  "DedicatedWorkerGlobalScope",
+  "EncodedAudioChunk",
+  "EncodedAudioChunkInit",
+  "EncodedAudioChunkType",
+  "EncodedVideoChunk",
+  "EncodedVideoChunkInit",
+  "EncodedVideoChunkType",
+  "EventTarget",
+  "GainNode",
+  "Gpu",
+  "GpuAdapter",
+  "GpuBindGroup",
+  "GpuBindGroupDescriptor",
+  "GpuBindGroupEntry",
+  "GpuBindGroupLayout",
+  "GpuCanvasConfiguration",
+  "GpuCanvasContext",
+  "GpuCommandBuffer",
+  "GpuCommandEncoder",
+  "GpuDevice",
+  "GpuDeviceDescriptor",
+  "GpuExternalTexture",
+  "GpuExternalTextureDescriptor",
+  "GpuFilterMode",
+  "GpuFragmentState",
+  "GpuLoadOp",
+  "GpuPrimitiveState",
+  "GpuQueue",
+  "GpuRenderPassColorAttachment",
+  "GpuRenderPassDescriptor",
+  "GpuRenderPassEncoder",
+  "GpuRenderPipeline",
+  "GpuRenderPipelineDescriptor",
+  "GpuSampler",
+  "GpuSamplerDescriptor",
+  "GpuShaderModule",
+  "GpuShaderModuleDescriptor",
+  "GpuStoreOp",
+  "GpuTexture",
+  "GpuTextureFormat",
+  "GpuTextureView",
+  "GpuVertexState",
+  "MessageEvent",
+  "OffscreenCanvas",
+  "Performance",
+  "VideoDecoder",
+  "VideoDecoderConfig",
+  "VideoDecoderInit",
+  "VideoFrame",
+  "Worker",
+  "WorkerGlobalScope",
+  "WorkerNavigator",
+  "console",
+]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]

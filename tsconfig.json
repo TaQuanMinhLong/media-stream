@@ -1,0 +1,9 @@
+{
+  "include": ["./scripts/**/*.ts"],
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleDetection": "force"
+  }
+}

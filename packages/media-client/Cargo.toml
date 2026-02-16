@@ -1,0 +1,47 @@
+[package]
+name = "media-client"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+media-core.workspace = true
+wasm-bindgen.workspace = true
+console_error_panic_hook.workspace = true
+js-sys.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = [
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "AudioContext",
+  "AudioDestinationNode",
+  "AudioData",
+  "AudioDataCopyToOptions",
+  "AudioDecoder",
+  "AudioDecoderConfig",
+  "AudioDecoderInit",
+  "AudioNode",
+  "AudioParam",
+  "BaseAudioContext",
+  "CodecState",
+  "EncodedAudioChunk",
+  "EncodedAudioChunkInit",
+  "EncodedAudioChunkType",
+  "EventTarget",
+  "GainNode",
+  "MessageEvent",
+  "MessagePort",
+  "OffscreenCanvas",
+  "Window",
+  "Worker",
+  "WorkerGlobalScope",
+  "WorkerOptions",
+  "WorkerType",
+]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]
