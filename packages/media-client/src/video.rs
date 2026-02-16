@@ -1,10 +1,9 @@
+use crate::listeners::Listeners;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{MessageEvent, OffscreenCanvas, Worker, WorkerOptions, WorkerType};
-
-use crate::listeners::Listeners;
 
 #[inline]
 fn get_string(data: &JsValue, key: &str) -> String {

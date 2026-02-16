@@ -1,4 +1,4 @@
-//! Client WASM crate: MediaClient struct for the main thread.
+//! Client WASM crate: MediaPlayer struct for the main thread.
 //! Creates the worker from URL, wires message handlers, exposes camelCase API for the composable.
 //! Audio pipeline runs on main thread (AudioContext cannot be created in a worker).
 
@@ -13,16 +13,16 @@ use video::VideoPlayer;
 use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
 
-/// Main-thread client: holds audio and video players plus current time.
+/// Main-thread player: holds audio and video players plus current time.
 /// Audio pipeline (AudioContext, decoder) runs here; worker only receives SET_AUDIO_BUFFERED_END.
 #[wasm_bindgen]
-pub struct MediaClient {
+pub struct MediaPlayer {
     video: VideoPlayer,
     audio: AudioPlayer,
     current_time: Rc<RefCell<f64>>,
 }
 
-impl Default for MediaClient {
+impl Default for MediaPlayer {
     fn default() -> Self {
         Self {
             video: VideoPlayer::new(),
@@ -33,10 +33,10 @@ impl Default for MediaClient {
 }
 
 #[wasm_bindgen]
-impl MediaClient {
-    /// Constructor for JS: `new MediaClient()`. Cannot implement Default (wasm_bindgen limitation).
+impl MediaPlayer {
+    /// Constructor for JS: `new MediaPlayer()`. Cannot implement Default (wasm_bindgen limitation).
     #[wasm_bindgen(constructor)]
-    pub fn new() -> MediaClient {
+    pub fn new() -> MediaPlayer {
         Self::default()
     }
 

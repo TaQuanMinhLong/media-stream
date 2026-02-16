@@ -2,7 +2,6 @@
 //! No browser APIs; used by both media-client and media-worker.
 
 pub mod fmp4;
-pub mod protocol;
 pub mod seek_index;
 
 pub use fmp4::{

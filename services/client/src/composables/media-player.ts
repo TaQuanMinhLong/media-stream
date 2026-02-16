@@ -1,6 +1,6 @@
 import type { MaybeComputedElementRef } from "@vueuse/core";
 import type { MediaAssetMetadata } from "../types/media-metadata";
-import init, { MediaClient } from "@media-stream/client";
+import init, { MediaPlayer } from "@media-stream/client";
 import wasmUrl from "@media-stream/client/media_client_bg.wasm?url";
 import { onMounted, ref, shallowRef, toValue } from "vue";
 import MediaWorkerURL from "../media-worker?worker&url";
@@ -8,12 +8,12 @@ import { formatSegmentUrl, timeToSegmentIndex } from "../utils/seek-index";
 
 const DEFAULT_DECRYPT = (buf: ArrayBuffer): Promise<ArrayBuffer> => Promise.resolve(buf);
 
-let mediaClient: MediaClient | null = null;
-async function getMediaClient(): Promise<MediaClient> {
-  if (mediaClient) return mediaClient;
+let mediaPlayer: MediaPlayer | null = null;
+async function getMediaPlayer(): Promise<MediaPlayer> {
+  if (mediaPlayer) return mediaPlayer;
   await init({ module_or_path: wasmUrl });
-  mediaClient = new MediaClient();
-  return mediaClient;
+  mediaPlayer = new MediaPlayer();
+  return mediaPlayer;
 }
 
 export function useMediaPlayer(
@@ -28,7 +28,7 @@ export function useMediaPlayer(
   const { assetId, decrypt = DEFAULT_DECRYPT } = options;
   const metadataUrl = options.metadataUrl ?? `/media/${assetId}/metadata.json`;
 
-  const clientRef = shallowRef<MediaClient | null>(null);
+  const playerRef = shallowRef<MediaPlayer | null>(null);
   const playerReady = ref(false);
   const currentTime = ref(0);
   const isPlaying = ref(false);
@@ -60,7 +60,7 @@ export function useMediaPlayer(
   let tickScheduled = false;
 
   function tick(): void {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client || !playerReady.value) {
       if (tickScheduled) requestAnimationFrame(tick);
       return;
@@ -93,7 +93,7 @@ export function useMediaPlayer(
 
   onMounted(async () => {
     try {
-      const client = await getMediaClient();
+      const client = await getMediaPlayer();
       client.setOnStateUpdate(
         (data: {
           currentTime: number;
@@ -128,14 +128,14 @@ export function useMediaPlayer(
       );
       if (!offscreen) return console.error("Failed to transfer control to offscreen");
       client.initCanvas(offscreen);
-      clientRef.value = client;
+      playerRef.value = client;
     } catch (e) {
       console.error("Media client init failed:", e);
     }
   });
 
   function initVideo(initBuffer: ArrayBuffer) {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client) return console.error("Client not found");
     try {
       client.initVideo(initBuffer);
@@ -145,7 +145,7 @@ export function useMediaPlayer(
   }
 
   function initAudio(initBuffer: ArrayBuffer): void {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client) return;
     try {
       client.initAudio(initBuffer);
@@ -155,7 +155,7 @@ export function useMediaPlayer(
   }
 
   function feedVideoSegment(buffer: ArrayBuffer) {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client) return console.error("Client not found");
     try {
       client.feedVideoSegment(buffer);
@@ -165,7 +165,7 @@ export function useMediaPlayer(
   }
 
   function feedAudioSegment(buffer: ArrayBuffer): void {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client) return;
     try {
       client.feedAudioSegment(buffer);
@@ -266,7 +266,7 @@ export function useMediaPlayer(
   }
 
   function seek(time: number): boolean {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client) return false;
     const wasPlaying = isPlaying.value;
     client.pause();
@@ -276,7 +276,7 @@ export function useMediaPlayer(
   }
 
   function resumeAfterSeek(): void {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (!client) return;
     client.play();
     isPlaying.value = true;
@@ -318,24 +318,24 @@ export function useMediaPlayer(
 
   async function togglePlay(): Promise<void> {
     await initMetadata();
-    if (!playerReady.value || !clientRef.value) return;
+    if (!playerReady.value || !playerRef.value) return;
     if (videoSegIdx.value === 1) {
       await Promise.all([fetchVideoSegment(), fetchAudioSegment()]);
     }
     if (isPlaying.value) {
-      clientRef.value.pause();
+      playerRef.value.pause();
     } else {
-      clientRef.value.play();
+      playerRef.value.play();
     }
     isPlaying.value = !isPlaying.value;
   }
 
   function setVolume(volume: number): void {
-    clientRef.value?.setVolume(volume);
+    playerRef.value?.setVolume(volume);
   }
 
   function setMuted(muted: boolean): void {
-    clientRef.value?.setMuted(muted);
+    playerRef.value?.setMuted(muted);
   }
 
   function toggleFullscreen(): void {
@@ -353,16 +353,16 @@ export function useMediaPlayer(
   }
 
   function terminateWorker(): void {
-    const client = clientRef.value;
+    const client = playerRef.value;
     if (client) {
       client.terminate();
-      clientRef.value = null;
+      playerRef.value = null;
     }
     playerReady.value = false;
   }
 
   return {
-    workerRef: clientRef,
+    playerRef,
     playerReady,
     currentTime,
     isPlaying,

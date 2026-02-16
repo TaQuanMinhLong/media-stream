@@ -346,7 +346,7 @@ impl AudioPlayer {
             let end_sec = (last.timestamp_us + last.duration_us) as f64 / 1_000_000.0;
             *self.audio_buffered_end.borrow_mut() = end_sec;
             // Video side no longer forwards this to the worker; only the main thread
-            // (MediaClient / composable) consumes audio buffered end.
+            // (MediaPlayer / composable) consumes audio buffered end.
         }
     }
 
