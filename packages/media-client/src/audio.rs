@@ -24,6 +24,11 @@ pub(crate) struct AudioPlayer {
     /// After seek, audio chunks before this time (seconds) are skipped once.
     seek_time: Rc<RefCell<f64>>,
     last_volume: RefCell<f64>,
+    /// Anchor-based scheduling: AudioContext time at the anchor point.
+    /// Set to -1.0 to signal that the next decoded chunk should re-anchor.
+    anchor_ctx: Rc<RefCell<f64>>,
+    /// Anchor-based scheduling: timeline (when) time at the anchor point.
+    anchor_when: Rc<RefCell<f64>>,
 }
 
 impl AudioPlayer {
@@ -38,6 +43,8 @@ impl AudioPlayer {
             last_audio_config: RefCell::new(None),
             seek_time: Rc::new(RefCell::new(-1.0)),
             last_volume: RefCell::new(1.0),
+            anchor_ctx: Rc::new(RefCell::new(-1.0)),
+            anchor_when: Rc::new(RefCell::new(-1.0)),
         }
     }
 
@@ -76,6 +83,10 @@ impl AudioPlayer {
         let ctx_cb = ctx.clone();
         let schedule_cb = Rc::clone(&schedule);
         let sources_cb = Rc::clone(&sources);
+        // Anchor-based scheduling: clone Rc handles so the output closure and
+        // seek() share the same state.  Reset to -1 on seek.
+        let anchor_ctx_cb = Rc::clone(&self.anchor_ctx);
+        let anchor_when_cb = Rc::clone(&self.anchor_when);
         let output = Closure::wrap(Box::new(move |data: AudioData| {
             let when = schedule_cb.borrow_mut().drain(..1).next();
             let when = match when {
@@ -99,8 +110,28 @@ impl AudioPlayer {
                 }
             }
 
-            let video_sec = *current_time.borrow();
-            let start_offset = (when - video_sec).max(0.0);
+            // Anchor-based scheduling: use video_sec only to establish the
+            // initial anchor point.  For subsequent chunks, compute the
+            // schedule time purely from the anchor + timeline offset.
+            // This avoids the backward-scheduling caused by discrete
+            // video_sec jumps between decoder output callbacks.
+            let a_ctx = *anchor_ctx_cb.borrow();
+            let a_when = *anchor_when_cb.borrow();
+            let scheduled_at = if a_ctx < 0.0 {
+                // First chunk after init / seek → establish anchor from video_sec.
+                let video_sec = *current_time.borrow();
+                let start_offset = (when - video_sec).max(0.0);
+                let t = ctx_cb.current_time() + start_offset;
+                *anchor_ctx_cb.borrow_mut() = t;
+                *anchor_when_cb.borrow_mut() = when;
+                t
+            } else {
+                // Subsequent chunks → relative offset from anchor (immune to video_sec jumps).
+                let t = a_ctx + (when - a_when);
+                // Never schedule in the past.
+                t.max(ctx_cb.current_time())
+            };
+
             let nch = data.number_of_channels();
             let nframes = data.number_of_frames();
             let sr = data.sample_rate();
@@ -146,7 +177,7 @@ impl AudioPlayer {
             let _ =
                 source.add_event_listener_with_callback("ended", onended.as_ref().unchecked_ref());
             onended.forget();
-            let _ = source.start_with_when(ctx_cb.current_time() + start_offset);
+            let _ = source.start_with_when(scheduled_at);
             data.close();
         }) as Box<dyn Fn(AudioData)>);
         let error_cb = Closure::wrap(Box::new(|| {}) as Box<dyn FnMut()>);
@@ -230,6 +261,10 @@ impl AudioPlayer {
     pub(crate) fn seek(&self, time: f64) {
         // After seek, skip audio chunks from before this time (in onAudioData gate).
         *self.seek_time.borrow_mut() = time;
+
+        // Reset anchor so the first post-seek chunk re-establishes it.
+        *self.anchor_ctx.borrow_mut() = -1.0;
+        *self.anchor_when.borrow_mut() = -1.0;
 
         // Stop and disconnect all currently playing/scheduled sources.
         if let Some(ref sources_rc) = *self.active_sources.borrow() {
