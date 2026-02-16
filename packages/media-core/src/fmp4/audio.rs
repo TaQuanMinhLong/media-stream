@@ -1,9 +1,9 @@
 //! Minimal fMP4 parser for audio: init (mp4a sample entry) and media (moof+mdat).
 //! Reference: services/client/src/_reference/parsers/fmp4-audio.ts
 
-use crate::fmp4::boxes::{
-    Box_, MDAT, MDHD, MOOF, MOOV, MP4A, TFDT, TFHD, TRAF, TRUN, read_box, read_i32, read_u16,
-    read_u32, read_u64,
+use crate::fmp4::{
+    boxes::{Box_, MP4A, TFDT, TFHD, TRAF, TRUN, read_box, read_i32, read_u16, read_u32, read_u64},
+    common::{find_moof_and_mdat, find_moov, read_mdhd_timescale},
 };
 
 const DEFAULT_TIMESCALE: u32 = 44100;
@@ -48,40 +48,11 @@ pub struct AudioMediaResult {
 
 /// Parse audio init segment to get mp4a sample entry and timescale.
 pub fn parse_audio_init(init_buf: &[u8]) -> Option<AudioInitResult> {
-    let limit = init_buf.len();
-    let mut pos = 0;
-    let moov = loop {
-        let box_ = read_box(init_buf, pos, limit)?;
-        if box_.type_ == MOOV {
-            break box_;
-        }
-        pos += box_.size;
-        if pos + 8 > limit {
-            return None;
-        }
-    };
-
+    let moov = find_moov(init_buf)?;
     let search_start = moov.payload_start;
     let search_end = moov.offset + moov.size;
 
-    let mut timescale = DEFAULT_TIMESCALE;
-    let mut i = search_start + 4;
-    while i + 16 <= search_end {
-        if read_u32(init_buf, i)? == MDHD {
-            let box_start = i - 4;
-            let box_size = read_u32(init_buf, box_start)? as usize;
-            if box_size >= 24 && box_start + box_size <= search_end {
-                let ver = init_buf.get(i + 4)?;
-                timescale = if *ver == 0 {
-                    read_u32(init_buf, i + 4 + 12)?
-                } else {
-                    read_u32(init_buf, i + 4 + 20)?
-                };
-            }
-            break;
-        }
-        i += 1;
-    }
+    let timescale = read_mdhd_timescale(init_buf, &moov, DEFAULT_TIMESCALE);
 
     let mut i = search_start + 4;
     while i + 4 <= search_end {
@@ -152,22 +123,55 @@ fn parse_tfhd(buf: &[u8], box_: &Box_) -> TfhdDefaults {
 
 /// Parse audio media segment (moof + mdat) into per-sample chunks.
 pub fn parse_audio_media(segment_buf: &[u8], timescale: u32) -> Option<AudioMediaResult> {
-    let limit = segment_buf.len();
-    let mut pos = 0;
-    let mut moof = None;
-    let mut mdat = None;
-    while pos + 8 <= limit {
-        let box_ = read_box(segment_buf, pos, limit)?;
-        match box_.type_ {
-            MOOF => moof = Some(box_),
-            MDAT => mdat = Some(box_),
-            _ => {}
-        }
-        pos += box_.size;
-    }
-    let moof = moof?;
-    let mdat = mdat?;
+    let (moof, mdat) = find_moof_and_mdat(segment_buf)?;
 
+    let (base_decode_time, sample_count, data_offset, sample_sizes, sample_durations) =
+        parse_audio_traf_and_trun(segment_buf, &moof, &mdat)?;
+
+    let timescale_u = timescale as u64;
+    let base_decode_time_us = (base_decode_time * 1_000_000) / timescale_u;
+    let mut samples = Vec::with_capacity(sample_count);
+    let mut byte_offset = data_offset;
+    let mut decode_time = base_decode_time;
+
+    for i in 0..sample_count {
+        let size = sample_sizes[i] as usize;
+        if size == 0 || byte_offset + size > segment_buf.len() {
+            break;
+        }
+        let data = segment_buf[byte_offset..byte_offset + size].to_vec();
+        let dur = sample_durations[i];
+        let timestamp_us = (decode_time * 1_000_000) / timescale_u;
+        let duration_us = (dur as u64 * 1_000_000) / timescale_u;
+
+        samples.push(AudioSample {
+            data,
+            timestamp_us,
+            duration_us,
+        });
+
+        decode_time += dur as u64;
+        byte_offset += size;
+    }
+
+    Some(AudioMediaResult {
+        base_decode_time_us,
+        samples,
+    })
+}
+
+#[inline]
+fn parse_audio_traf_and_trun(
+    segment_buf: &[u8],
+    moof: &Box_,
+    mdat: &Box_,
+) -> Option<(
+    u64,      // base_decode_time
+    usize,    // safe_count
+    usize,    // data_offset
+    Vec<u32>, // sample_sizes
+    Vec<u32>, // sample_durations
+)> {
     let mut base_decode_time: u64 = 0;
     let mut sample_count = 0usize;
     let mut data_offset = mdat.payload_start;
@@ -194,9 +198,15 @@ pub fn parse_audio_media(segment_buf: &[u8], timescale: u32) -> Option<AudioMedi
             } else if child.type_ == TFDT && child.payload_size >= 4 {
                 let ver = segment_buf.get(child.payload_start).copied().unwrap_or(1);
                 if ver == 0 && child.payload_size >= 8 {
-                    base_decode_time = read_u32(segment_buf, child.payload_start + 4)? as u64;
+                    base_decode_time = match read_u32(segment_buf, child.payload_start + 4) {
+                        Some(v) => v as u64,
+                        None => return None,
+                    };
                 } else if child.payload_size >= 12 {
-                    base_decode_time = read_u64(segment_buf, child.payload_start + 4)?;
+                    base_decode_time = match read_u64(segment_buf, child.payload_start + 4) {
+                        Some(v) => v,
+                        None => return None,
+                    };
                 }
             } else if child.type_ == TRUN && child.payload_size >= 8 {
                 let p = child.payload_start;
@@ -275,36 +285,13 @@ pub fn parse_audio_media(segment_buf: &[u8], timescale: u32) -> Option<AudioMedi
         return None;
     }
 
-    let timescale_u = timescale as u64;
-    let base_decode_time_us = (base_decode_time * 1_000_000) / timescale_u;
-    let mut samples = Vec::with_capacity(safe_count);
-    let mut byte_offset = data_offset;
-    let mut decode_time = base_decode_time;
-
-    for i in 0..safe_count {
-        let size = sample_sizes[i] as usize;
-        if size == 0 || byte_offset + size > segment_buf.len() {
-            break;
-        }
-        let data = segment_buf[byte_offset..byte_offset + size].to_vec();
-        let dur = sample_durations[i];
-        let timestamp_us = (decode_time * 1_000_000) / timescale_u;
-        let duration_us = (dur as u64 * 1_000_000) / timescale_u;
-
-        samples.push(AudioSample {
-            data,
-            timestamp_us,
-            duration_us,
-        });
-
-        decode_time += dur as u64;
-        byte_offset += size;
-    }
-
-    Some(AudioMediaResult {
-        base_decode_time_us,
-        samples,
-    })
+    Some((
+        base_decode_time,
+        safe_count,
+        data_offset,
+        sample_sizes,
+        sample_durations,
+    ))
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@
 
 pub mod audio;
 pub mod boxes;
+mod common;
 pub mod video;
 
 pub use audio::{

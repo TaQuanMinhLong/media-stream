@@ -53,31 +53,62 @@ pub fn format_segment_url(template: &str, index: u32) -> String {
     let mut chars = template.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '%' {
-            let _ = chars.next_if_eq(&'0'); // optional 0
-            let mut width_str = String::new();
-            while chars
-                .peek()
-                .copied()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false)
-            {
-                if let Some(d) = chars.next() {
-                    width_str.push(d);
+            match parse_format_spec(&mut chars) {
+                FormatSpec::Spec { width } => {
+                    out.push_str(&format_index_with_width(&index_str, width));
                 }
-            }
-            if chars.next_if_eq(&'d').is_some() {
-                let width: usize = width_str.parse().unwrap_or(5);
-                let replaced = format!("{:0>width$}", index_str, width = width);
-                out.push_str(&replaced);
-            } else {
-                out.push('%');
-                out.push_str(&width_str);
+                FormatSpec::Literal { after_percent } => {
+                    out.push('%');
+                    out.push_str(&after_percent);
+                }
             }
         } else {
             out.push(c);
         }
     }
     out
+}
+
+#[derive(Debug)]
+enum FormatSpec {
+    /// A valid `%d` / `%0Nd` spec with computed width.
+    Spec { width: usize },
+    /// Not a valid `%...d` sequence; what should follow the literal `%`.
+    Literal { after_percent: String },
+}
+
+#[inline]
+fn parse_format_spec<I>(chars: &mut std::iter::Peekable<I>) -> FormatSpec
+where
+    I: Iterator<Item = char>,
+{
+    // Optional '0' is intentionally ignored in the literal case to match the
+    // original behavior where `%0x` became `%x` in the output.
+    let _had_zero = chars.next_if_eq(&'0').is_some();
+
+    let mut width_str = String::new();
+    while chars
+        .peek()
+        .copied()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        if let Some(d) = chars.next() {
+            width_str.push(d);
+        }
+    }
+
+    if chars.next_if_eq(&'d').is_some() {
+        let width: usize = width_str.parse().unwrap_or(5);
+        FormatSpec::Spec { width }
+    } else {
+        FormatSpec::Literal { after_percent: width_str }
+    }
+}
+
+#[inline]
+fn format_index_with_width(index_str: &str, width: usize) -> String {
+    format!("{:0>width$}", index_str, width = width)
 }
 
 #[cfg(test)]

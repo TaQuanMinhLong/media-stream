@@ -99,13 +99,12 @@ export function useMediaPlayer(
           currentTime: number;
           isPlaying: boolean;
           bufferedEnd: number;
-          audioBufferedEnd: number;
           isBuffering: boolean;
         }) => {
           currentTime.value = data.currentTime;
           isPlaying.value = data.isPlaying;
           bufferedEnd.value = data.bufferedEnd;
-          audioBufferedEnd.value = data.audioBufferedEnd ?? 0;
+          audioBufferedEnd.value = client.getAudioBufferedEnd();
           isBuffering.value = data.isBuffering;
         },
       );

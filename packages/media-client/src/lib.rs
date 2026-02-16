@@ -126,6 +126,12 @@ impl MediaClient {
         self.audio.feed_segment(buffer, &self.video)
     }
 
+    /// Get the latest audio buffered end (seconds) from the main-thread audio pipeline.
+    #[wasm_bindgen(js_name = "getAudioBufferedEnd")]
+    pub fn get_audio_buffered_end(&self) -> f64 {
+        self.audio.audio_buffered_end()
+    }
+
     /// Set volume (0–1). Main-thread gain node.
     #[wasm_bindgen(js_name = "setVolume")]
     pub fn set_volume(&self, volume: f64) {

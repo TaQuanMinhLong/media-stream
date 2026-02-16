@@ -9,8 +9,8 @@ build-worker:
     bun run scripts/patch-wasm-pkg-name.ts packages/media-worker/pkg/package.json @media-stream/worker
 
 # Check media-worker (must use wasm target for web_sys WebCodecs/WebGPU APIs)
-check-worker:
-    cargo check -p media-worker --target wasm32-unknown-unknown
+check:
+    cargo clippy -p media-client --target wasm32-unknown-unknown --fix --allow-dirty
     cargo clippy -p media-worker --target wasm32-unknown-unknown --fix --allow-dirty
 
 install-deps:

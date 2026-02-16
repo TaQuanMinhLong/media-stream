@@ -29,9 +29,17 @@ pub(crate) struct AudioPlayer {
     anchor_ctx: Rc<RefCell<f64>>,
     /// Anchor-based scheduling: timeline (when) time at the anchor point.
     anchor_when: Rc<RefCell<f64>>,
+    /// End time (seconds) of the last audio sample fed to the decoder.
+    audio_buffered_end: RefCell<f64>,
 }
 
 impl AudioPlayer {
+    /// Get the latest audio buffered end in seconds.
+    #[inline]
+    pub(crate) fn audio_buffered_end(&self) -> f64 {
+        *self.audio_buffered_end.borrow()
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             audio_ctx: RefCell::new(None),
@@ -45,6 +53,7 @@ impl AudioPlayer {
             last_volume: RefCell::new(1.0),
             anchor_ctx: Rc::new(RefCell::new(-1.0)),
             anchor_when: Rc::new(RefCell::new(-1.0)),
+            audio_buffered_end: RefCell::new(0.0),
         }
     }
 
@@ -56,10 +65,7 @@ impl AudioPlayer {
         let buffer = buffer
             .dyn_into::<js_sys::ArrayBuffer>()
             .map_err(|_| JsValue::from_str("initAudio: expected ArrayBuffer"))?;
-        let len = buffer.byte_length() as usize;
-        let arr = js_sys::Uint8Array::new(&buffer);
-        let mut bytes = vec![0u8; len];
-        arr.copy_to(&mut bytes[..]);
+        let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
         let init_result = match parse_audio_init(&bytes) {
             Some(r) => r,
             None => return Err(JsValue::from_str("initAudio: parse failed")),
@@ -88,96 +94,37 @@ impl AudioPlayer {
         let anchor_ctx_cb = Rc::clone(&self.anchor_ctx);
         let anchor_when_cb = Rc::clone(&self.anchor_when);
         let output = Closure::wrap(Box::new(move |data: AudioData| {
-            let when = schedule_cb.borrow_mut().drain(..1).next();
-            let when = match when {
+            let when = match schedule_cb.borrow_mut().drain(..1).next() {
                 Some(w) => w,
                 None => {
                     data.close();
                     return;
                 }
             };
-            // Seek gating: right after seek, drop chunks from before the seek point
-            // to avoid audible glitches from pre-seek audio.
-            {
-                let mut s = seek_time.borrow_mut();
-                if *s >= 0.0 && when < *s - 0.05 {
-                    data.close();
-                    return;
-                }
-                if *s >= 0.0 {
-                    // First valid post-seek chunk arrived — resume normal mode.
-                    *s = -1.0;
-                }
+
+            if AudioPlayer::should_drop_chunk_after_seek(&seek_time, when) {
+                data.close();
+                return;
             }
 
-            // Anchor-based scheduling: use video_sec only to establish the
-            // initial anchor point.  For subsequent chunks, compute the
-            // schedule time purely from the anchor + timeline offset.
-            // This avoids the backward-scheduling caused by discrete
-            // video_sec jumps between decoder output callbacks.
-            let a_ctx = *anchor_ctx_cb.borrow();
-            let a_when = *anchor_when_cb.borrow();
-            let scheduled_at = if a_ctx < 0.0 {
-                // First chunk after init / seek → establish anchor from video_sec.
-                let video_sec = *current_time.borrow();
-                let start_offset = (when - video_sec).max(0.0);
-                let t = ctx_cb.current_time() + start_offset;
-                *anchor_ctx_cb.borrow_mut() = t;
-                *anchor_when_cb.borrow_mut() = when;
-                t
-            } else {
-                // Subsequent chunks → relative offset from anchor (immune to video_sec jumps).
-                let t = a_ctx + (when - a_when);
-                // Never schedule in the past.
-                t.max(ctx_cb.current_time())
-            };
+            let scheduled_at = AudioPlayer::compute_scheduled_time(
+                &ctx_cb,
+                &current_time,
+                &anchor_ctx_cb,
+                &anchor_when_cb,
+                when,
+            );
 
-            let nch = data.number_of_channels();
-            let nframes = data.number_of_frames();
-            let sr = data.sample_rate();
-            let buf = match ctx_cb.create_buffer(nch, nframes, sr) {
-                Ok(b) => b,
-                Err(_) => {
+            let buf = match AudioPlayer::create_buffer_from_audio_data(&ctx_cb, &data) {
+                Some(b) => b,
+                None => {
                     data.close();
                     return;
                 }
             };
 
-            // Copy decoded PCM per-channel via a Float32Array intermediate,
-            // mirroring the TS: data.copyTo(buffer.getChannelData(i), {planeIndex: i}).
-            // AudioBuffer is NOT a BufferSource, so we must use a typed array.
-            let mut f32_buf = vec![0f32; nframes as usize];
-            for i in 0..nch {
-                let opts = AudioDataCopyToOptions::new(i);
-                let float32 = js_sys::Float32Array::new_with_length(nframes);
-                if data
-                    .copy_to_with_buffer_source(float32.unchecked_ref(), &opts)
-                    .is_err()
-                {
-                    data.close();
-                    return;
-                }
-                float32.copy_to(&mut f32_buf[..]);
-                let _ = buf.copy_to_channel(&f32_buf, i as i32);
-            }
+            AudioPlayer::schedule_audio_source(&ctx_cb, &gain_cb, &sources_cb, &buf, scheduled_at);
 
-            let source = match ctx_cb.create_buffer_source() {
-                Ok(s) => s,
-                Err(_) => {
-                    data.close();
-                    return;
-                }
-            };
-            let _ = source.set_buffer(Some(&buf));
-            let _ = source.connect_with_audio_node(gain_cb.as_ref());
-            if let Ok(mut v) = sources_cb.try_borrow_mut() {
-                v.push(source.clone());
-            }
-            let onended = Closure::wrap(Box::new(|| {}) as Box<dyn FnMut()>);
-            let _ =
-                source.add_event_listener_with_callback("ended", onended.as_ref().unchecked_ref());
-            onended.forget();
-            let _ = source.start_with_when(scheduled_at);
             data.close();
         }) as Box<dyn Fn(AudioData)>);
         let error_cb = Closure::wrap(Box::new(|| {}) as Box<dyn FnMut()>);
@@ -202,22 +149,15 @@ impl AudioPlayer {
     }
 
     pub(crate) fn feed_segment(&self, buffer: JsValue, video: &VideoPlayer) -> Result<(), JsValue> {
-        let buffer = buffer
-            .dyn_into::<js_sys::ArrayBuffer>()
-            .map_err(|_| JsValue::from_str("feedAudioSegment: expected ArrayBuffer"))?;
-        let len = buffer.byte_length() as usize;
-        let arr = js_sys::Uint8Array::new(&buffer);
-        let mut bytes = vec![0u8; len];
-        arr.copy_to(&mut bytes[..]);
+        let bytes = AudioPlayer::buffer_to_bytes(buffer, "feedAudioSegment: expected ArrayBuffer")?;
         let timescale = *self.audio_timescale.borrow();
         let media_result = match parse_audio_media(&bytes, timescale) {
             Some(r) => r,
             None => return Ok(()),
         };
-        if let Some(last) = media_result.samples.last() {
-            let end_sec = (last.timestamp_us + last.duration_us) as f64 / 1_000_000.0;
-            video.send_audio_buffered_end(end_sec);
-        }
+
+        self.notify_audio_buffered_end(&media_result, video);
+
         let schedule_rc = match self.schedule_queue.borrow().as_ref() {
             Some(r) => Rc::clone(r),
             None => return Ok(()),
@@ -229,31 +169,10 @@ impl AudioPlayer {
         if decoder.state() != CodecState::Configured {
             return Ok(());
         }
-        {
-            let mut schedule = schedule_rc.borrow_mut();
-            for sample in &media_result.samples {
-                let timeline_sec = sample.timestamp_us as f64 / 1_000_000.0;
-                schedule.push(timeline_sec);
-            }
-        }
-        for sample in media_result.samples {
-            let data_arr = js_sys::Uint8Array::new_with_length(sample.data.len() as u32);
-            data_arr.copy_from(&sample.data[..]);
-            let init = EncodedAudioChunkInit::new(
-                data_arr.as_ref(),
-                sample.timestamp_us as f64,
-                EncodedAudioChunkType::Key,
-            );
-            init.set_duration(sample.duration_us as f64);
-            let chunk = match EncodedAudioChunk::new(&init) {
-                Ok(c) => c,
-                Err(_) => break,
-            };
-            if decoder.decode(&chunk).is_err() {
-                schedule_rc.borrow_mut().pop();
-                break;
-            }
-        }
+
+        AudioPlayer::enqueue_sample_timestamps(&schedule_rc, &media_result);
+        AudioPlayer::decode_audio_samples(decoder, schedule_rc, media_result.samples);
+
         Ok(())
     }
 
@@ -266,51 +185,13 @@ impl AudioPlayer {
         *self.anchor_ctx.borrow_mut() = -1.0;
         *self.anchor_when.borrow_mut() = -1.0;
 
-        // Stop and disconnect all currently playing/scheduled sources.
-        if let Some(ref sources_rc) = *self.active_sources.borrow() {
-            if let Ok(mut sources) = sources_rc.try_borrow_mut() {
-                for source in sources.iter() {
-                    #[allow(deprecated)]
-                    let _ = source.stop();
-                    let _ = source.disconnect();
-                }
-                sources.clear();
-            }
-        }
+        // Keep audio buffered end consistent with the new seek position.
+        *self.audio_buffered_end.borrow_mut() = time;
 
-        // Clear scheduled timestamps so only post-seek media will be scheduled.
-        if let Some(ref schedule_rc) = *self.schedule_queue.borrow() {
-            if let Ok(mut schedule) = schedule_rc.try_borrow_mut() {
-                schedule.clear();
-            }
-        }
-
-        // Reset decoder to clear internal state from pre-seek chunks.
-        // Without this, the decoder stops producing output after seek (confirmed by logs).
-        // Mirrors the TS AudioPlayer which close+recreates the decoder on seek.
-        if let Some(ref decoder) = *self.audio_decoder.borrow() {
-            let _ = js_sys::Reflect::apply(
-                &js_sys::Reflect::get(decoder.as_ref(), &JsValue::from_str("reset"))
-                    .unwrap_or(JsValue::UNDEFINED)
-                    .dyn_into::<js_sys::Function>()
-                    .unwrap_or_else(|_| js_sys::Function::new_no_args("")),
-                decoder.as_ref(),
-                &js_sys::Array::new(),
-            );
-            if let Some(ref config) = *self.last_audio_config.borrow() {
-                let _ = decoder.configure(config);
-            }
-        }
-
-        // NOTE: We deliberately do NOT disconnect/recreate the gain node here.
-        // The output closure captures a clone of the original gain node (gain_cb).
-        // If we disconnect it, post-seek audio would connect to a dead node.
-        // Stopping all sources above is sufficient to prevent glitches.
-
-        // Suspend until play() is called again to resume audio.
-        if let Some(ref ctx) = *self.audio_ctx.borrow() {
-            let _ = ctx.suspend();
-        }
+        self.stop_all_audio_sources();
+        self.clear_schedule_queue();
+        self.reset_audio_decoder();
+        self.suspend_audio_context();
     }
 
     pub(crate) fn play(&self) {
@@ -341,6 +222,228 @@ impl AudioPlayer {
         };
         if let Some(ref gain) = *self.gain_node.borrow() {
             gain.gain().set_value(vol as f32);
+        }
+    }
+}
+
+impl AudioPlayer {
+    /// Decide whether to drop a decoded chunk after seek based on its timeline `when`.
+    #[inline]
+    fn should_drop_chunk_after_seek(seek_time: &Rc<RefCell<f64>>, when: f64) -> bool {
+        let mut s = seek_time.borrow_mut();
+        if *s >= 0.0 && when < *s - 0.05 {
+            return true;
+        }
+        if *s >= 0.0 {
+            // First valid post-seek chunk arrived — resume normal mode.
+            *s = -1.0;
+        }
+        false
+    }
+
+    /// Compute the scheduled AudioContext time for a chunk using anchor-based scheduling.
+    #[inline]
+    fn compute_scheduled_time(
+        ctx: &AudioContext,
+        current_time: &Rc<RefCell<f64>>,
+        anchor_ctx: &Rc<RefCell<f64>>,
+        anchor_when: &Rc<RefCell<f64>>,
+        when: f64,
+    ) -> f64 {
+        let a_ctx = *anchor_ctx.borrow();
+        let a_when = *anchor_when.borrow();
+        if a_ctx < 0.0 {
+            // First chunk after init / seek → establish anchor from video_sec.
+            let video_sec = *current_time.borrow();
+            let start_offset = (when - video_sec).max(0.0);
+            let t = ctx.current_time() + start_offset;
+            *anchor_ctx.borrow_mut() = t;
+            *anchor_when.borrow_mut() = when;
+            t
+        } else {
+            // Subsequent chunks → relative offset from anchor (immune to video_sec jumps).
+            let t = a_ctx + (when - a_when);
+            // Never schedule in the past.
+            t.max(ctx.current_time())
+        }
+    }
+
+    /// Create an `AudioBuffer` from decoded `AudioData`, copying PCM per channel.
+    #[inline]
+    fn create_buffer_from_audio_data(
+        ctx: &AudioContext,
+        data: &AudioData,
+    ) -> Option<web_sys::AudioBuffer> {
+        let nch = data.number_of_channels();
+        let nframes = data.number_of_frames();
+        let sr = data.sample_rate();
+        let buf = ctx.create_buffer(nch, nframes, sr).ok()?;
+
+        // Copy decoded PCM per-channel via a Float32Array intermediate,
+        // mirroring the TS: data.copyTo(buffer.getChannelData(i), {planeIndex: i}).
+        let mut f32_buf = vec![0f32; nframes as usize];
+        for i in 0..nch {
+            let opts = AudioDataCopyToOptions::new(i);
+            let float32 = js_sys::Float32Array::new_with_length(nframes);
+            if data
+                .copy_to_with_buffer_source(float32.unchecked_ref(), &opts)
+                .is_err()
+            {
+                return None;
+            }
+            float32.copy_to(&mut f32_buf[..]);
+            let _ = buf.copy_to_channel(&f32_buf, i as i32);
+        }
+
+        Some(buf)
+    }
+
+    /// Schedule an `AudioBuffer` for playback and track the created source node.
+    #[inline]
+    fn schedule_audio_source(
+        ctx: &AudioContext,
+        gain: &GainNode,
+        sources: &Rc<RefCell<Vec<AudioBufferSourceNode>>>,
+        buf: &web_sys::AudioBuffer,
+        scheduled_at: f64,
+    ) {
+        let source = match ctx.create_buffer_source() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        source.set_buffer(Some(buf));
+        let _ = source.connect_with_audio_node(gain.as_ref());
+        if let Ok(mut v) = sources.try_borrow_mut() {
+            v.push(source.clone());
+        }
+        let onended = Closure::wrap(Box::new(|| {}) as Box<dyn FnMut()>);
+        let _ = source.add_event_listener_with_callback("ended", onended.as_ref().unchecked_ref());
+        onended.forget();
+        let _ = source.start_with_when(scheduled_at);
+    }
+
+    /// Convert a JS `ArrayBuffer` into a Rust `Vec<u8>` with a contextual error message.
+    #[inline]
+    fn buffer_to_bytes(buffer: JsValue, context: &str) -> Result<Vec<u8>, JsValue> {
+        let buffer = buffer
+            .dyn_into::<js_sys::ArrayBuffer>()
+            .map_err(|_| JsValue::from_str(context))?;
+        let len = buffer.byte_length() as usize;
+        let arr = js_sys::Uint8Array::new(&buffer);
+        let mut bytes = vec![0u8; len];
+        arr.copy_to(&mut bytes[..]);
+        Ok(bytes)
+    }
+
+    /// Update audio buffered end from media_result and notify video side, if any.
+    #[inline]
+    fn notify_audio_buffered_end(
+        &self,
+        media_result: &media_core::AudioMediaResult,
+        _video: &VideoPlayer,
+    ) {
+        if let Some(last) = media_result.samples.last() {
+            let end_sec = (last.timestamp_us + last.duration_us) as f64 / 1_000_000.0;
+            *self.audio_buffered_end.borrow_mut() = end_sec;
+            // Video side no longer forwards this to the worker; only the main thread
+            // (MediaClient / composable) consumes audio buffered end.
+        }
+    }
+
+    /// Enqueue sample timestamps (in seconds) into the schedule queue.
+    #[inline]
+    fn enqueue_sample_timestamps(
+        schedule_rc: &Rc<RefCell<Vec<f64>>>,
+        media_result: &media_core::AudioMediaResult,
+    ) {
+        let mut schedule = match schedule_rc.try_borrow_mut() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for sample in &media_result.samples {
+            let timeline_sec = sample.timestamp_us as f64 / 1_000_000.0;
+            schedule.push(timeline_sec);
+        }
+    }
+
+    /// Decode audio samples, keeping the schedule queue in sync on failure.
+    #[inline]
+    fn decode_audio_samples(
+        decoder: AudioDecoder,
+        schedule_rc: Rc<RefCell<Vec<f64>>>,
+        samples: Vec<media_core::AudioSample>,
+    ) {
+        for sample in samples {
+            let data_arr = js_sys::Uint8Array::new_with_length(sample.data.len() as u32);
+            data_arr.copy_from(&sample.data[..]);
+            let init = EncodedAudioChunkInit::new(
+                data_arr.as_ref(),
+                sample.timestamp_us as f64,
+                EncodedAudioChunkType::Key,
+            );
+            init.set_duration(sample.duration_us as f64);
+            let chunk = match EncodedAudioChunk::new(&init) {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+            if decoder.decode(&chunk).is_err() {
+                if let Ok(mut schedule) = schedule_rc.try_borrow_mut() {
+                    schedule.pop();
+                }
+                break;
+            }
+        }
+    }
+
+    /// Stop and disconnect all currently playing/scheduled sources.
+    #[inline]
+    fn stop_all_audio_sources(&self) {
+        if let Some(ref sources_rc) = *self.active_sources.borrow()
+            && let Ok(mut sources) = sources_rc.try_borrow_mut()
+        {
+            for source in sources.iter() {
+                #[allow(deprecated)]
+                let _ = source.stop();
+                let _ = source.disconnect();
+            }
+            sources.clear();
+        }
+    }
+
+    /// Clear scheduled timestamps so only post-seek media will be scheduled.
+    #[inline]
+    fn clear_schedule_queue(&self) {
+        if let Some(ref schedule_rc) = *self.schedule_queue.borrow()
+            && let Ok(mut schedule) = schedule_rc.try_borrow_mut()
+        {
+            schedule.clear();
+        }
+    }
+
+    /// Reset decoder to clear internal state from pre-seek chunks.
+    /// Mirrors the TS AudioPlayer which close+recreates the decoder on seek.
+    #[inline]
+    fn reset_audio_decoder(&self) {
+        if let Some(ref decoder) = *self.audio_decoder.borrow() {
+            let _ = js_sys::Reflect::apply(
+                &js_sys::Reflect::get(decoder.as_ref(), &JsValue::from_str("reset"))
+                    .unwrap_or(JsValue::UNDEFINED)
+                    .dyn_into::<js_sys::Function>()
+                    .unwrap_or_else(|_| js_sys::Function::new_no_args("")),
+                decoder.as_ref(),
+                &js_sys::Array::new(),
+            );
+            if let Some(ref config) = *self.last_audio_config.borrow() {
+                let _ = decoder.configure(config);
+            }
+        }
+    }
+
+    /// Suspend until play() is called again to resume audio.
+    #[inline]
+    fn suspend_audio_context(&self) {
+        if let Some(ref ctx) = *self.audio_ctx.borrow() {
+            let _ = ctx.suspend();
         }
     }
 }

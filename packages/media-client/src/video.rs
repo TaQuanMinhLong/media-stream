@@ -75,66 +75,16 @@ impl VideoPlayer {
 
             match type_.as_str() {
                 "SCRIPT_READY" => {
-                    if let Some(canvas) = pending_canvas.borrow_mut().take() {
-                        let obj = js_sys::Object::new();
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from_str("type"),
-                            &JsValue::from_str("INIT_CANVAS"),
-                        )
-                        .ok();
-                        js_sys::Reflect::set(&obj, &JsValue::from_str("canvas"), &canvas).ok();
-                        let _ = worker_for_closure
-                            .post_message_with_transfer(&obj, &js_sys::Array::of1(&canvas));
-                    }
+                    VideoPlayer::handle_script_ready(&worker_for_closure, &pending_canvas);
                 }
                 "READY" => {
-                    if let Some(ref f) = *on_ready.borrow() {
-                        let _ = f.call0(&JsValue::NULL);
-                    }
+                    VideoPlayer::handle_ready(&on_ready);
                 }
                 "ERROR" => {
-                    let msg = get_string(&data, "message");
-                    if let Some(ref f) = *on_error.borrow() {
-                        let _ = f.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                    }
+                    VideoPlayer::handle_error(&data, &on_error);
                 }
                 "STATE_UPDATE" => {
-                    *current_time.borrow_mut() = get_f64(&data, "currentTime");
-                    if let Some(ref f) = *on_state.borrow() {
-                        let obj = js_sys::Object::new();
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from_str("currentTime"),
-                            &JsValue::from_f64(get_f64(&data, "currentTime")),
-                        )
-                        .ok();
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from_str("isPlaying"),
-                            &JsValue::from_bool(get_bool(&data, "isPlaying")),
-                        )
-                        .ok();
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from_str("bufferedEnd"),
-                            &JsValue::from_f64(get_f64(&data, "bufferedEnd")),
-                        )
-                        .ok();
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from_str("audioBufferedEnd"),
-                            &JsValue::from_f64(get_f64(&data, "audioBufferedEnd")),
-                        )
-                        .ok();
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from_str("isBuffering"),
-                            &JsValue::from_bool(get_bool(&data, "isBuffering")),
-                        )
-                        .ok();
-                        let _ = f.call1(&JsValue::NULL, &obj);
-                    }
+                    VideoPlayer::handle_state_update(&data, &current_time, &on_state);
                 }
                 _ => {}
             }
@@ -151,87 +101,155 @@ impl VideoPlayer {
         *self.pending_canvas.borrow_mut() = Some(canvas);
     }
 
+    #[inline]
     pub(crate) fn tick(&self) {
         if let Some(ref w) = *self.worker.borrow() {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str("TICK")).ok();
-            let _ = w.post_message(&obj);
+            let _ = Self::post_message(w, "TICK", &[]);
         }
     }
 
+    #[inline]
     pub(crate) fn send_simple(&self, msg_type: &str) {
         if let Some(ref w) = *self.worker.borrow() {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("type"),
-                &JsValue::from_str(msg_type),
-            )
-            .ok();
-            let _ = w.post_message(&obj);
+            let _ = Self::post_message(w, msg_type, &[]);
         }
     }
 
+    #[inline]
     pub(crate) fn send_seek(&self, time: f64) {
         if let Some(ref w) = *self.worker.borrow() {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str("SEEK")).ok();
-            js_sys::Reflect::set(&obj, &JsValue::from_str("time"), &JsValue::from_f64(time)).ok();
-            let _ = w.post_message(&obj);
+            let fields = [("time", JsValue::from_f64(time))];
+            let _ = Self::post_message(w, "SEEK", &fields);
         }
     }
 
+    #[inline]
     pub(crate) fn send_video_init(&self, buffer: JsValue) -> Result<(), JsValue> {
         let worker = self.worker.borrow();
         let w = worker
             .as_ref()
             .ok_or_else(|| JsValue::from_str("Worker not initialized"))?;
-        let obj = js_sys::Object::new();
-        js_sys::Reflect::set(
-            &obj,
-            &JsValue::from_str("type"),
-            &JsValue::from_str("INIT_VIDEO"),
-        )
-        .ok();
-        js_sys::Reflect::set(&obj, &JsValue::from_str("buffer"), &buffer).ok();
+        let obj = Self::build_message_object("INIT_VIDEO", &[("buffer", buffer.clone())]);
         w.post_message_with_transfer(&obj, &js_sys::Array::of1(&buffer))?;
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn send_video_segment(&self, buffer: JsValue) -> Result<(), JsValue> {
         let worker = self.worker.borrow();
         let w = worker
             .as_ref()
             .ok_or_else(|| JsValue::from_str("Worker not initialized"))?;
-        let obj = js_sys::Object::new();
-        js_sys::Reflect::set(
-            &obj,
-            &JsValue::from_str("type"),
-            &JsValue::from_str("FEED_VIDEO_SEGMENT"),
-        )
-        .ok();
-        js_sys::Reflect::set(&obj, &JsValue::from_str("buffer"), &buffer).ok();
+        let obj = Self::build_message_object("FEED_VIDEO_SEGMENT", &[("buffer", buffer.clone())]);
         w.post_message_with_transfer(&obj, &js_sys::Array::of1(&buffer))?;
         Ok(())
     }
 
-    pub(crate) fn send_audio_buffered_end(&self, value: f64) {
-        if let Some(ref w) = *self.worker.borrow() {
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("type"),
-                &JsValue::from_str("SET_AUDIO_BUFFERED_END"),
-            )
-            .ok();
-            js_sys::Reflect::set(&obj, &JsValue::from_str("value"), &JsValue::from_f64(value)).ok();
-            let _ = w.post_message(&obj);
-        }
-    }
-
+    #[inline]
     pub(crate) fn terminate(&self) {
         if let Some(w) = self.worker.borrow_mut().take() {
             w.terminate();
         }
+    }
+}
+
+impl VideoPlayer {
+    #[inline]
+    fn handle_script_ready(worker: &Worker, pending_canvas: &Rc<RefCell<Option<OffscreenCanvas>>>) {
+        if let Some(canvas) = pending_canvas.borrow_mut().take() {
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("type"),
+                &JsValue::from_str("INIT_CANVAS"),
+            )
+            .ok();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("canvas"), &canvas).ok();
+            let _ = worker.post_message_with_transfer(&obj, &js_sys::Array::of1(&canvas));
+        }
+    }
+
+    #[inline]
+    fn handle_ready(on_ready: &Rc<RefCell<Option<js_sys::Function>>>) {
+        if let Some(ref f) = *on_ready.borrow() {
+            let _ = f.call0(&JsValue::NULL);
+        }
+    }
+
+    #[inline]
+    fn handle_error(data: &JsValue, on_error: &Rc<RefCell<Option<js_sys::Function>>>) {
+        let msg = get_string(data, "message");
+        if let Some(ref f) = *on_error.borrow() {
+            let _ = f.call1(&JsValue::NULL, &JsValue::from_str(&msg));
+        }
+    }
+
+    #[inline]
+    fn handle_state_update(
+        data: &JsValue,
+        current_time: &Rc<RefCell<f64>>,
+        on_state: &Rc<RefCell<Option<js_sys::Function>>>,
+    ) {
+        *current_time.borrow_mut() = get_f64(data, "currentTime");
+        if let Some(ref f) = *on_state.borrow() {
+            let obj = Self::build_state_update_object(data);
+            let _ = f.call1(&JsValue::NULL, &obj);
+        }
+    }
+
+    #[inline]
+    fn build_state_update_object(data: &JsValue) -> JsValue {
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("currentTime"),
+            &JsValue::from_f64(get_f64(data, "currentTime")),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("isPlaying"),
+            &JsValue::from_bool(get_bool(data, "isPlaying")),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("bufferedEnd"),
+            &JsValue::from_f64(get_f64(data, "bufferedEnd")),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("isBuffering"),
+            &JsValue::from_bool(get_bool(data, "isBuffering")),
+        )
+        .ok();
+        obj.into()
+    }
+
+    /// Helper to construct a message object with a type and additional fields.
+    #[inline]
+    fn build_message_object(msg_type: &str, fields: &[(&str, JsValue)]) -> JsValue {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("type"),
+            &JsValue::from_str(msg_type),
+        );
+        for (key, value) in fields {
+            let _ = js_sys::Reflect::set(&obj, &JsValue::from_str(key), value);
+        }
+        obj.into()
+    }
+
+    /// Post a simple message to the worker with a `type` and additional fields.
+    #[inline]
+    fn post_message(
+        worker: &Worker,
+        msg_type: &str,
+        fields: &[(&str, JsValue)],
+    ) -> Result<(), JsValue> {
+        let obj = Self::build_message_object(msg_type, fields);
+        worker.post_message(&obj)
     }
 }
