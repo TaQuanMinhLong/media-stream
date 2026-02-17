@@ -577,5 +577,4 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.deriveKey = nativeBinding.deriveKey
-module.exports.sealChunksStreaming = nativeBinding.sealChunksStreaming
 module.exports.sealData = nativeBinding.sealData

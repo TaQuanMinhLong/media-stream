@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { deriveKey, sealChunksStreaming } from "@media-stream/secret";
+import { deriveKey, sealData } from "@media-stream/secret";
 import { Elysia } from "elysia";
 
 /**
@@ -8,7 +8,7 @@ import { Elysia } from "elysia";
  *
  * TODO: replace with a real persistent storage like Redis
  */
-const SECRETS = new Map<string, { key: Buffer; isDirty: boolean }>();
+const SECRETS = new Map<string, { key: Uint8Array; isDirty: boolean }>();
 const MEDIA_ROOT = process.env.MEDIA_DIR || path.join(process.cwd(), "media");
 const COOKIE_NAME = "media-session-id";
 
@@ -53,15 +53,14 @@ new Elysia()
     const sessionId = crypto.randomUUID();
     const salt = new Uint8Array(16);
     crypto.getRandomValues(salt);
-    const saltBuffer = Buffer.from(salt);
     cookie[COOKIE_NAME]!.value = sessionId;
     cookie[COOKIE_NAME]!.httpOnly = true;
     cookie[COOKIE_NAME]!.sameSite = "strict";
     cookie[COOKIE_NAME]!.secure = process.env.NODE_ENV === "production";
-    const key = deriveKey(sessionId, saltBuffer);
+    const key = deriveKey(sessionId, salt);
     SECRETS.set(sessionId, { key, isDirty: false });
     set.headers["Content-Type"] = "application/octet-stream";
-    return saltBuffer;
+    return salt.buffer;
   })
   // MATCHES: /media/sample/metadata.json
   .get("/media/:asset/metadata.json", async ({ params, set }) => {
@@ -97,18 +96,9 @@ new Elysia()
     }
 
     const rawBytes = await fileRef.arrayBuffer();
+    const sealed = sealData(rawBytes, secretKey.key);
 
-    const stream = new ReadableStream({
-      type: "direct",
-      pull(controller) {
-        sealChunksStreaming([Buffer.from(rawBytes)], secretKey.key, (chunk: Buffer) => {
-          controller.write(chunk);
-        });
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
+    return new Response(sealed, {
       headers: {
         "Content-Type": "image/webp",
         "Cache-Control": "public, max-age=31536000, immutable",
