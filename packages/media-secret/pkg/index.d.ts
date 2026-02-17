@@ -8,4 +8,4 @@ export declare function deriveKey(sessionId: string, salt: Uint8Array): Uint8Arr
  *
  * Calls `media_core::secret::seal_data` (compress → encrypt → embed in WebP).
  */
-export declare function sealData(data: ArrayBuffer, secretKey: Uint8Array): Uint8Array
+export declare function sealData(data: Uint8Array, secretKey: Uint8Array): Uint8Array

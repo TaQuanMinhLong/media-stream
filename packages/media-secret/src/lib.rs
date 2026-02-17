@@ -5,7 +5,7 @@ use napi_derive::napi;
 ///
 /// Calls `media_core::secret::seal_data` (compress → encrypt → embed in WebP).
 #[napi(js_name = "sealData")]
-pub fn seal_data_napi(data: ArrayBuffer, secret_key: Uint8Array) -> Result<Uint8Array> {
+pub fn seal_data_napi(data: Uint8Array, secret_key: Uint8Array) -> Result<Uint8Array> {
     let key: [u8; 32] = secret_key
         .as_ref()
         .try_into()

@@ -63,7 +63,7 @@ new Elysia()
     const key = deriveKey(sessionId, salt);
     SECRETS.set(sessionId, { key, isDirty: false });
     set.headers["Content-Type"] = "application/octet-stream";
-    return salt.buffer;
+    return salt;
   })
   // MATCHES: /media/sample/metadata.json
   .get("/media/:asset/metadata.json", async ({ params, set }) => {
@@ -98,8 +98,7 @@ new Elysia()
       return "File not found";
     }
 
-    const rawBytes = await fileRef.arrayBuffer();
-    const sealed = sealData(rawBytes, secretKey.key);
+    const sealed = sealData(await fileRef.bytes(), secretKey.key);
 
     return new Response(sealed, {
       headers: {
