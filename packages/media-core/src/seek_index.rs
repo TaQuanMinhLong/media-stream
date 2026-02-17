@@ -102,7 +102,9 @@ where
         let width: usize = width_str.parse().unwrap_or(5);
         FormatSpec::Spec { width }
     } else {
-        FormatSpec::Literal { after_percent: width_str }
+        FormatSpec::Literal {
+            after_percent: width_str,
+        }
     }
 }
 

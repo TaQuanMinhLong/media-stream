@@ -13,19 +13,21 @@ build-secret:
     cd packages/media-secret && \
     napi build --release --platform --package-json-path=./pkg/package.json -o=./pkg
 
-# Check media-worker (must use wasm target for web_sys WebCodecs/WebGPU APIs)
-check:
-    cargo clippy -p media-client --target wasm32-unknown-unknown --fix --allow-dirty
-    cargo clippy -p media-worker --target wasm32-unknown-unknown --fix --allow-dirty
-
-install-deps:
-    bun install
-
 # Build both WASM crates
 build-wasm: build-client build-worker install-deps
 
 # Build both WASM crates and NAPI addon
 build: build-secret build-wasm
+
+# Check media-worker (must use wasm target for web_sys WebCodecs/WebGPU APIs)
+check:
+    cargo clippy -p media-client --target wasm32-unknown-unknown --fix --allow-dirty
+    cargo clippy -p media-worker --target wasm32-unknown-unknown --fix --allow-dirty
+    cargo clippy -p media-secret --fix --allow-dirty
+    cargo clippy -p media-core --fix --allow-dirty
+
+install-deps:
+    bun install
 
 # Test media-core (with seal feature for crypto round-trip)
 test-core:

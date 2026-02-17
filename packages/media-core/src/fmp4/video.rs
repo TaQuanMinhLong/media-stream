@@ -174,12 +174,7 @@ pub fn parse_video_media(segment_buf: &[u8], timescale: u32) -> Option<VideoMedi
     })
 }
 
-#[inline]
-fn parse_video_traf_and_trun(
-    segment_buf: &[u8],
-    moof: &Box_,
-    mdat: &Box_,
-) -> Option<(
+type VideoTrafTrunResult = (
     u64,       // base_decode_time
     usize,     // safe_count
     usize,     // data_offset
@@ -187,7 +182,14 @@ fn parse_video_traf_and_trun(
     Vec<u32>,  // sample_durations
     Vec<i32>,  // sample_ctos
     Vec<bool>, // sample_key_flags
-)> {
+);
+
+#[inline]
+fn parse_video_traf_and_trun(
+    segment_buf: &[u8],
+    moof: &Box_,
+    mdat: &Box_,
+) -> Option<VideoTrafTrunResult> {
     let mut base_decode_time: u64 = 0;
     let mut sample_count = 0usize;
     let mut data_offset = mdat.payload_start;
@@ -222,10 +224,7 @@ fn parse_video_traf_and_trun(
                         None => return None,
                     };
                 } else if child.payload_size >= 12 {
-                    base_decode_time = match read_u64(segment_buf, child.payload_start + 4) {
-                        Some(v) => v,
-                        None => return None,
-                    };
+                    base_decode_time = read_u64(segment_buf, child.payload_start + 4)?;
                 }
             } else if child.type_ == TRUN && child.payload_size >= 8 {
                 let p = child.payload_start;
@@ -324,7 +323,6 @@ fn parse_video_traf_and_trun(
         return None;
     }
 
-    let safe_count = safe_count;
     Some((
         base_decode_time,
         safe_count,

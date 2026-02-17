@@ -72,4 +72,3 @@ pub(crate) fn parse_seek_time(data: &JsValue) -> f64 {
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0)
 }
-

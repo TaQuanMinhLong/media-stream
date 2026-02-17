@@ -183,7 +183,9 @@ impl MediaPlayer {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             if session_id.is_empty() {
-                return Err(JsValue::from_str("handshake: session invalid or already burned"));
+                return Err(JsValue::from_str(
+                    "handshake: session invalid or already burned",
+                ));
             }
             let key = media_core::secret::derive_key(session_id.as_bytes(), salt.as_ref())
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;

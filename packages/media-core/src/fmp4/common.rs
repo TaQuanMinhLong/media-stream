@@ -25,11 +25,7 @@ pub(crate) fn find_moov(buf: &[u8]) -> Option<Box_> {
 /// read its timescale. Falls back to `default_timescale` when parsing
 /// fails or the box is missing.
 #[inline]
-pub(crate) fn read_mdhd_timescale(
-    buf: &[u8],
-    moov: &Box_,
-    default_timescale: u32,
-) -> u32 {
+pub(crate) fn read_mdhd_timescale(buf: &[u8], moov: &Box_, default_timescale: u32) -> u32 {
     let search_start = moov.payload_start;
     let search_end = moov.offset + moov.size;
 
@@ -43,14 +39,15 @@ pub(crate) fn read_mdhd_timescale(
                     break;
                 };
                 let box_size = box_size as usize;
-                if box_size >= 24 && box_start + box_size <= search_end {
-                    if let Some(ver) = buf.get(i + 4) {
-                        timescale = if *ver == 0 {
-                            read_u32(buf, i + 4 + 12).unwrap_or(timescale)
-                        } else {
-                            read_u32(buf, i + 4 + 20).unwrap_or(timescale)
-                        };
-                    }
+                if box_size >= 24
+                    && box_start + box_size <= search_end
+                    && let Some(ver) = buf.get(i + 4)
+                {
+                    timescale = if *ver == 0 {
+                        read_u32(buf, i + 4 + 12).unwrap_or(timescale)
+                    } else {
+                        read_u32(buf, i + 4 + 20).unwrap_or(timescale)
+                    };
                 }
                 break;
             }
@@ -84,4 +81,3 @@ pub(crate) fn find_moof_and_mdat(buf: &[u8]) -> Option<(Box_, Box_)> {
 
     Some((moof?, mdat?))
 }
-

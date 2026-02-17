@@ -125,7 +125,12 @@ impl MediaWorker {
         )
         .ok();
         global::post_message(&obj);
-        post_state_update(self.state.current_time, self.state.is_playing, self.state.buffered_end, false);
+        post_state_update(
+            self.state.current_time,
+            self.state.is_playing,
+            self.state.buffered_end,
+            false,
+        );
     }
 
     /// Handle a message from the main thread. Dispatch by message.type.
@@ -220,7 +225,8 @@ impl MediaWorker {
         if let Some(old) = self.display_frame.take() {
             old.close();
         }
-        if let (Some(dec), Some(config)) = (self.decoder.as_ref(), self.last_codec_config.as_ref()) {
+        if let (Some(dec), Some(config)) = (self.decoder.as_ref(), self.last_codec_config.as_ref())
+        {
             let _ = dec.configure(config);
         }
     }

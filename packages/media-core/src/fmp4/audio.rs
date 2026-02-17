@@ -160,18 +160,20 @@ pub fn parse_audio_media(segment_buf: &[u8], timescale: u32) -> Option<AudioMedi
     })
 }
 
-#[inline]
-fn parse_audio_traf_and_trun(
-    segment_buf: &[u8],
-    moof: &Box_,
-    mdat: &Box_,
-) -> Option<(
+type AudioTrafTrunResult = (
     u64,      // base_decode_time
     usize,    // safe_count
     usize,    // data_offset
     Vec<u32>, // sample_sizes
     Vec<u32>, // sample_durations
-)> {
+);
+
+#[inline]
+fn parse_audio_traf_and_trun(
+    segment_buf: &[u8],
+    moof: &Box_,
+    mdat: &Box_,
+) -> Option<AudioTrafTrunResult> {
     let mut base_decode_time: u64 = 0;
     let mut sample_count = 0usize;
     let mut data_offset = mdat.payload_start;
@@ -203,10 +205,7 @@ fn parse_audio_traf_and_trun(
                         None => return None,
                     };
                 } else if child.payload_size >= 12 {
-                    base_decode_time = match read_u64(segment_buf, child.payload_start + 4) {
-                        Some(v) => v,
-                        None => return None,
-                    };
+                    base_decode_time = read_u64(segment_buf, child.payload_start + 4)?;
                 }
             } else if child.type_ == TRUN && child.payload_size >= 8 {
                 let p = child.payload_start;
