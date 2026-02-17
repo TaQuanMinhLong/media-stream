@@ -2,6 +2,12 @@
 members = ["packages/*"]
 resolver = "2"
 
+[profile.release]
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+lto = true
+
 [workspace.dependencies]
 media-secret.path = "./packages/media-secret"
 media-core.path = "./packages/media-core"

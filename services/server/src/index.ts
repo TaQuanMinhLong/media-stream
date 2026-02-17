@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { staticPlugin } from "@elysiajs/static";
 import { deriveKey, sealData } from "@media-stream/secret";
-import { Elysia } from "elysia";
+import { Elysia, file } from "elysia";
 
 /**
  * sessionId -> { key: Buffer, isDirty: boolean }
@@ -10,6 +11,7 @@ import { Elysia } from "elysia";
  */
 const SECRETS = new Map<string, { key: Uint8Array; isDirty: boolean }>();
 const MEDIA_ROOT = process.env.MEDIA_DIR || path.join(process.cwd(), "media");
+const PUBLIC_DIR = process.env.PUBLIC_DIR || path.join(process.cwd(), "public");
 const COOKIE_NAME = "media-session-id";
 
 if (!existsSync(MEDIA_ROOT)) {
@@ -33,7 +35,8 @@ function demangleAssetFilename(mangled: string): string {
 }
 
 new Elysia()
-  .get("/", () => ({ status: "Media Server is online" }))
+  .get("/", () => file(path.join(process.cwd(), "public", "index.html")))
+  .use(staticPlugin({ prefix: "/", assets: PUBLIC_DIR }))
   .get("/media/session", async ({ cookie, set }) => {
     const sessionId = cookie[COOKIE_NAME]?.value as string | undefined;
     if (!sessionId || !SECRETS.has(sessionId)) {
@@ -105,6 +108,7 @@ new Elysia()
       },
     });
   })
+  .get("/healthz", () => ({ status: "Media Server is online" }))
   .listen(3000);
 
 console.log(`🦊 Media server running at http://localhost:3000`);
