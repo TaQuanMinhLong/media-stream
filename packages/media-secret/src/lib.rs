@@ -1,72 +1,66 @@
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use napi::bindgen_prelude::*;
+use napi_derive::napi;
 
-const PLACEHOLDER: &[u8] = include_bytes!("./assets/placeholder.webp");
+/// Seal raw data into a steganographic WebP blob.
+///
+/// Calls `media_core::secret::seal_data` (compress → encrypt → embed in WebP).
+#[napi(js_name = "sealData")]
+pub fn seal_data_napi(data: Buffer, secret_key: Buffer) -> Result<Buffer> {
+    let key: [u8; 32] = secret_key
+        .as_ref()
+        .try_into()
+        .map_err(|_| Error::from_reason("secret_key must be exactly 32 bytes"))?;
 
-/// Errors from seal/open operations.
-#[derive(Debug)]
-pub enum SealError {
-    Compression(std::io::Error),
-    Encryption(chacha20poly1305::aead::Error),
+    let sealed = media_core::secret::seal_data(data.as_ref(), &key)
+        .map_err(|e| Error::from_reason(e.to_string()))?;
+
+    Ok(sealed.into())
 }
 
-impl std::fmt::Display for SealError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SealError::Compression(e) => write!(f, "compression failed: {}", e),
-            SealError::Encryption(e) => write!(f, "encryption failed: {}", e),
-        }
-    }
+/// Derive a 32-byte key from session_id + salt using Argon2id.
+#[napi(js_name = "deriveKey")]
+pub fn derive_key_napi(session_id: String, salt: Buffer) -> Result<Buffer> {
+    let key = media_core::secret::derive_key(session_id.as_bytes(), salt.as_ref())
+        .map_err(|e| Error::from_reason(format!("key derivation failed: {e}")))?;
+    Ok(Buffer::from(key.to_vec()))
 }
 
-impl std::error::Error for SealError {}
+/// Open a sealed WebP blob (decrypt + decompress). For testing and verification.
+#[napi(js_name = "openSealedData")]
+pub fn open_sealed_data_napi(data: Buffer, secret_key: Buffer) -> Result<Buffer> {
+    let key: [u8; 32] = secret_key
+        .as_ref()
+        .try_into()
+        .map_err(|_| Error::from_reason("secret_key must be exactly 32 bytes"))?;
 
-/// Takes a WebP image and a secret, returns a new WebP with hidden,
-/// compressed, and encrypted data.
-pub fn seal_data(data: &[u8], secret_key: &[u8; 32]) -> Result<Vec<u8>, SealError> {
-    // 1. Compress
-    let compressed = zstd::encode_all(data, 3).map_err(SealError::Compression)?;
+    let opened = media_core::secret::open_sealed_data(data.as_ref(), &key)
+        .ok_or_else(|| Error::from_reason("open_sealed_data failed (wrong key or corrupted)"))?;
 
-    // 2. Encrypt
-    let cipher = ChaCha20Poly1305::new(secret_key.into());
-    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 12 bytes
-    let ciphertext = cipher
-        .encrypt(&nonce, compressed.as_ref())
-        .map_err(SealError::Encryption)?;
-
-    // 3. Package and Append
-    let mut final_payload = Vec::with_capacity(PLACEHOLDER.len() + 12 + ciphertext.len());
-    final_payload.extend_from_slice(PLACEHOLDER);
-    final_payload.extend_from_slice(&nonce); // Store nonce so we can decrypt later
-    final_payload.extend_from_slice(&ciphertext);
-
-    Ok(final_payload)
+    Ok(Buffer::from(opened))
 }
 
-/// Finds the RIFF end marker, extracts the nonce, decrypts, and decompresses.
-pub fn open_sealed_data(data: &[u8], secret_key: &[u8; 32]) -> Option<Vec<u8>> {
-    // Find the end of the legitimate WebP image via RIFF header
-    if data.len() < 12 || &data[0..4] != b"RIFF" {
-        return None;
+/// Seal each chunk and push the sealed blob to JS via the `on_chunk` callback.
+///
+/// The JS side creates a `ReadableStream` (Bun direct stream) and calls
+/// `controller.write(chunk)` inside the callback. This keeps streaming entirely
+/// in JS while Rust drives the seal-per-chunk loop.
+#[napi(js_name = "sealChunksStreaming")]
+pub fn seal_chunks_streaming_napi(
+    chunks: Vec<Buffer>,
+    secret_key: Buffer,
+    on_chunk: Function<'_, Buffer, ()>,
+) -> Result<()> {
+    let key: [u8; 32] = secret_key
+        .as_ref()
+        .try_into()
+        .map_err(|_| Error::from_reason("secret_key must be exactly 32 bytes"))?;
+
+    for chunk_data in &chunks {
+        let sealed = media_core::secret::seal_data(chunk_data.as_ref(), &key)
+            .map_err(|e| Error::from_reason(e.to_string()))?;
+        let buf: Buffer = sealed.into();
+        on_chunk.call(buf)?;
     }
 
-    let riff_size = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
-    let image_end = riff_size + 8;
-
-    if data.len() <= image_end + 12 {
-        return None;
-    }
-
-    // 1. Extract Nonce and Ciphertext
-    let nonce_start = image_end;
-    let ciphertext_start = nonce_start + 12;
-    let nonce = Nonce::from_slice(&data[nonce_start..ciphertext_start]);
-    let ciphertext = &data[ciphertext_start..];
-
-    // 2. Decrypt
-    let cipher = ChaCha20Poly1305::new(secret_key.into());
-    let decrypted = cipher.decrypt(nonce, ciphertext).ok()?;
-
-    // 3. Decompress
-    zstd::decode_all(decrypted.as_slice()).ok()
+    Ok(())
 }

@@ -3,8 +3,19 @@ name = "media-core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+# Enable for native (server) side: compression with zstd (C) + nonce generation via getrandom.
+# Without this feature only open_sealed_data (decrypt) and derive_key are available,
+# using pure-Rust ruzstd for decompression — safe for wasm32.
+seal = ["dep:zstd", "chacha20poly1305/getrandom"]
+
 [dependencies]
 serde.workspace = true
+chacha20poly1305.workspace = true
+argon2.workspace = true
+zstd = { workspace = true, optional = true }
+ruzstd.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

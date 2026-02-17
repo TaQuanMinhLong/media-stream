@@ -256,11 +256,12 @@ impl MediaWorker {
 
     #[inline]
     fn feed_segment(&mut self, data: &JsValue) {
-        let bytes = match extract_array_buffer_bytes(data, "buffer") {
+        let raw_bytes = match extract_array_buffer_bytes(data, "buffer") {
             Some(b) => b,
             None => return,
         };
-        let media_result = match parse_video_media(&bytes, self.timescale) {
+
+        let media_result = match parse_video_media(&raw_bytes, self.timescale) {
             Some(r) => r,
             None => return,
         };

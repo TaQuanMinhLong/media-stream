@@ -8,6 +8,11 @@ build-worker:
     cd packages/media-worker && wasm-pack build --target web --release --out-dir pkg
     bun run scripts/patch-wasm-pkg-name.ts packages/media-worker/pkg/package.json @media-stream/worker
 
+# Build media-secret NAPI addon (server-side encryption)
+build-secret:
+    cd packages/media-secret && \
+    napi build --release --platform --package-json-path=./pkg/package.json -o=./pkg
+
 # Check media-worker (must use wasm target for web_sys WebCodecs/WebGPU APIs)
 check:
     cargo clippy -p media-client --target wasm32-unknown-unknown --fix --allow-dirty
@@ -19,9 +24,20 @@ install-deps:
 # Build both WASM crates
 build-wasm: build-client build-worker install-deps
 
-# Test media-core (no WASM)
+# Build both WASM crates and NAPI addon
+build: build-secret build-wasm
+
+# Test media-core (with seal feature for crypto round-trip)
 test-core:
-    cargo test -p media-core
+    cargo test -p media-core --features seal
+
+test-client:
+    cd services/client && bun test
+
+test-server:
+    cd services/server && bun test
+
+test: test-core test-client test-server
 
 format:
     cargo fmt

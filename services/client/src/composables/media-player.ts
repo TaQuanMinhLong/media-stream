@@ -22,11 +22,27 @@ export function useMediaPlayer(
   options: {
     assetId: string;
     metadataUrl?: string;
+    /** When true, use /_assets with handshake + MediaPlayer.decryptSegment. */
+    encrypted?: boolean;
+    /** Base URL for handshake (/_init, /_session). Defaults to window.location.origin. */
+    apiOrigin?: string;
     decrypt?: (buf: ArrayBuffer) => Promise<ArrayBuffer>;
   },
 ) {
-  const { assetId, decrypt = DEFAULT_DECRYPT } = options;
+  const { assetId, encrypted = false } = options;
   const metadataUrl = options.metadataUrl ?? `/media/${assetId}/metadata.json`;
+  const apiOrigin =
+    options.apiOrigin ?? (typeof window !== "undefined" ? window.location.origin : "");
+
+  const baseSegmentUrl = encrypted ? `/_assets/${assetId}` : `/media/${assetId}`;
+  const fetchCredentials = encrypted ? ("include" as RequestCredentials) : undefined;
+
+  const getDecrypt = (client: MediaPlayer) =>
+    encrypted
+      ? (buf: ArrayBuffer) => Promise.resolve(client.decryptSegment(buf) as ArrayBuffer)
+      : (options.decrypt ?? DEFAULT_DECRYPT);
+
+  let decrypt: (buf: ArrayBuffer) => Promise<ArrayBuffer> = DEFAULT_DECRYPT;
 
   const playerRef = shallowRef<MediaPlayer | null>(null);
   const playerReady = ref(false);
@@ -129,6 +145,7 @@ export function useMediaPlayer(
       if (!offscreen) return console.error("Failed to transfer control to offscreen");
       client.initCanvas(offscreen);
       playerRef.value = client;
+      decrypt = getDecrypt(client);
     } catch (e) {
       console.error("Media client init failed:", e);
     }
@@ -179,10 +196,10 @@ export function useMediaPlayer(
     if (!meta || isFetchingVideo.value || videoSegIdx.value > meta.video.segmentCount) return;
     isFetchingVideo.value = true;
     const idx = videoSegIdx.value;
-    const url = `/media/${assetId}/${formatSegmentUrl(meta.video.segmentTemplate, idx)}`;
+    const url = `${baseSegmentUrl}/${formatSegmentUrl(meta.video.segmentTemplate, idx)}`;
     const abort = fetchAbortController;
     try {
-      const res = await fetch(url, { signal: abort.signal });
+      const res = await fetch(url, { signal: abort.signal, credentials: fetchCredentials });
       if (!res.ok) throw new Error("Video chunk failed");
       const buf = await res.arrayBuffer();
       if (abort.signal.aborted) return;
@@ -204,10 +221,10 @@ export function useMediaPlayer(
     if (!meta || isFetchingAudio.value || audioSegIdx.value > meta.audio.segmentCount) return;
     isFetchingAudio.value = true;
     const idx = audioSegIdx.value;
-    const url = `/media/${assetId}/${formatSegmentUrl(meta.audio.segmentTemplate, idx)}`;
+    const url = `${baseSegmentUrl}/${formatSegmentUrl(meta.audio.segmentTemplate, idx)}`;
     const abort = fetchAbortController;
     try {
-      const res = await fetch(url, { signal: abort.signal });
+      const res = await fetch(url, { signal: abort.signal, credentials: fetchCredentials });
       if (!res.ok) throw new Error("Audio chunk failed");
       const buf = await res.arrayBuffer();
       if (abort.signal.aborted) return;
@@ -245,12 +262,22 @@ export function useMediaPlayer(
       console.warn("Player not ready yet (WebGPU initializing). Click play again in a moment.");
       return;
     }
+    const client = playerRef.value;
+    if (!client) return;
+    if (encrypted) {
+      try {
+        await client.handshake(apiOrigin);
+      } catch (e) {
+        console.error("Handshake failed", e);
+        return;
+      }
+    }
     const meta = await loadMetadata();
     if (!meta) return;
     try {
       const [vRes, aRes] = await Promise.all([
-        fetch(`/media/${assetId}/${meta.video.initUrl}`),
-        fetch(`/media/${assetId}/${meta.audio.initUrl}`),
+        fetch(`${baseSegmentUrl}/${meta.video.initUrl}`, { credentials: fetchCredentials }),
+        fetch(`${baseSegmentUrl}/${meta.audio.initUrl}`, { credentials: fetchCredentials }),
       ]);
       const [vInit, aInit] = await Promise.all([vRes.arrayBuffer(), aRes.arrayBuffer()]);
       const [decryptedVideoInit, decryptedAudioInit] = await Promise.all([

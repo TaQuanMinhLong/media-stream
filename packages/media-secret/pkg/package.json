@@ -1,0 +1,19 @@
+{
+  "name": "@media-stream/secret",
+  "version": "0.1.0",
+  "type": "module",
+  "napi": {
+    "binaryName": "media-secret",
+    "targets": ["x86_64-unknown-linux-gnu"]
+  },
+  "engines": {
+    "node": ">= 18"
+  },
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "require": "./index.js",
+      "types": "./index.d.ts"
+    }
+  }
+}

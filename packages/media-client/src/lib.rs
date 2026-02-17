@@ -11,15 +11,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use video::VideoPlayer;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::future_to_promise;
 use web_sys::OffscreenCanvas;
 
 /// Main-thread player: holds audio and video players plus current time.
 /// Audio pipeline (AudioContext, decoder) runs here; worker only receives SET_AUDIO_BUFFERED_END.
+/// Holds the derived secret key (32 bytes) after handshake when using encrypted mode.
 #[wasm_bindgen]
 pub struct MediaPlayer {
     video: VideoPlayer,
     audio: AudioPlayer,
     current_time: Rc<RefCell<f64>>,
+    secret_key: Rc<RefCell<Option<[u8; 32]>>>,
 }
 
 impl Default for MediaPlayer {
@@ -28,6 +31,7 @@ impl Default for MediaPlayer {
             video: VideoPlayer::new(),
             audio: AudioPlayer::new(),
             current_time: Rc::new(RefCell::new(0.0)),
+            secret_key: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -142,6 +146,72 @@ impl MediaPlayer {
     #[wasm_bindgen(js_name = "setMuted")]
     pub fn set_muted(&self, muted: bool) {
         self.audio.set_muted(muted);
+    }
+
+    /// Handshake for encrypted mode: GET /_init (salt binary), GET /_session (sessionId),
+    /// derive key, store only the key, discard sessionId and salt.
+    #[wasm_bindgen(js_name = "handshake")]
+    pub fn handshake(&self, base_url: &str) -> js_sys::Promise {
+        let base = base_url.trim_end_matches('/').to_string();
+        let secret_key = Rc::clone(&self.secret_key);
+        future_to_promise(async move {
+            let client = reqwest::Client::new();
+            let init_url = format!("{}/_init", base);
+            let session_url = format!("{}/_session", base);
+            let init_res = client
+                .get(&init_url)
+                .send()
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            if !init_res.status().is_success() {
+                return Err(JsValue::from_str("handshake: /_init failed"));
+            }
+            let salt = init_res
+                .bytes()
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let session_res = client
+                .get(&session_url)
+                .send()
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            if !session_res.status().is_success() {
+                return Err(JsValue::from_str("handshake: /_session failed"));
+            }
+            let session_id = session_res
+                .text()
+                .await
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            if session_id.is_empty() {
+                return Err(JsValue::from_str("handshake: session invalid or already burned"));
+            }
+            let key = media_core::secret::derive_key(session_id.as_bytes(), salt.as_ref())
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            *secret_key.borrow_mut() = Some(key);
+            Ok(JsValue::undefined())
+        })
+    }
+
+    /// Decrypt a sealed WebP segment. Returns raw bytes as ArrayBuffer.
+    /// Requires prior handshake. Throws if decryption fails.
+    #[wasm_bindgen(js_name = "decryptSegment")]
+    pub fn decrypt_segment(&self, encrypted: JsValue) -> Result<JsValue, JsValue> {
+        let buffer = encrypted
+            .dyn_into::<js_sys::ArrayBuffer>()
+            .map_err(|_| JsValue::from_str("decryptSegment: expected ArrayBuffer"))?;
+        let arr = js_sys::Uint8Array::new(&buffer);
+        let len = arr.byte_length() as usize;
+        let mut bytes = vec![0u8; len];
+        arr.copy_to(&mut bytes[..]);
+        let key = self
+            .secret_key
+            .borrow()
+            .ok_or_else(|| JsValue::from_str("decryptSegment: no key (call handshake first)"))?;
+        let decrypted = media_core::secret::open_sealed_data(&bytes, &key)
+            .ok_or_else(|| JsValue::from_str("decryptSegment: decryption failed"))?;
+        let out = js_sys::Uint8Array::new_with_length(decrypted.len() as u32);
+        out.copy_from(&decrypted);
+        Ok(out.buffer().into())
     }
 
     /// Terminate the worker and clear state. Call when tearing down the player.

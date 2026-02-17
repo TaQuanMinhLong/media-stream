@@ -13,8 +13,12 @@ const props = withDefaults(
   defineProps<{
     assetId: string;
     metadataUrl?: string;
+    /** When true, use encrypted /_assets endpoint with handshake. */
+    encrypted?: boolean;
+    /** Base URL for handshake. Defaults to window.location.origin. */
+    apiOrigin?: string;
   }>(),
-  {},
+  { encrypted: false },
 );
 
 const canvasRef = useTemplateRef("canvasRef");
@@ -40,6 +44,8 @@ const {
 } = useMediaPlayer(canvasRef, containerRef, {
   assetId: props.assetId,
   metadataUrl: props.metadataUrl,
+  encrypted: props.encrypted,
+  apiOrigin: props.apiOrigin,
 });
 
 onMounted(() => {

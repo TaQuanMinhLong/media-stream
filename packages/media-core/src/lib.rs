@@ -1,7 +1,9 @@
-//! Core logic for media streaming: seek-index, fMP4 parsing, message protocol.
-//! No browser APIs; used by both media-client and media-worker.
+//! Core logic for media streaming: seek-index, fMP4 parsing, message protocol,
+//! and encryption/decryption (steganographic WebP pipeline).
+//! No browser APIs; used by media-client, media-worker, and media-secret (NAPI).
 
 pub mod fmp4;
+pub mod secret;
 pub mod seek_index;
 
 pub use fmp4::{

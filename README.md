@@ -3,6 +3,8 @@
 A monorepo for experimenting with high-performance media playback in the browser.\
 It combines Rust (compiled to WebAssembly) for low-level media processing with a Bun-powered TypeScript/Vue client.
 
+Documentation: `docs/crypto.md` — handshake flow, sealed WebP format, and server streaming notes.
+
 ### Project structure
 
 * **Root workspace**
@@ -12,9 +14,10 @@ It combines Rust (compiled to WebAssembly) for low-level media processing with a
   * `services/client`: Web client (Vue + TypeScript, powered by Bun)
   * `services/server`: Backend / API (Bun)
 * **packages/**
-  * `packages/media-core`: Core Rust crate with media primitives
+  * `packages/media-core`: Core Rust crate with media primitives and crypto (seal/open, derive_key)
   * `packages/media-client`: Rust crate compiled to WASM for main-thread usage (`@media-stream/client`)
   * `packages/media-worker`: Rust crate compiled to WASM for worker-thread usage (`@media-stream/worker`)
+  * `packages/media-secret`: NAPI addon for server-side encryption (`@media-stream/secret`)
 
 ### Prerequisites
 
@@ -77,10 +80,16 @@ This project uses a `Justfile` at the root as the main entrypoint for common tas
   just check
   ```
 
-* **Run core Rust tests**
+* **Run core Rust tests** (includes seal/open round-trip)
 
   ```bash
   just test-core
+  ```
+
+* **Run server crypto tests** (sealData/openSealedData, streaming)
+
+  ```bash
+  bun run --cwd services/server test
   ```
 
 * **Format code (Rust + client)**
@@ -139,5 +148,8 @@ All of these commands must be run from the repo root.
 
    ```bash
    just test-core
+   bun run --cwd services/server test
    just check
    ```
+
+5. **Encrypted mode**: Enable the `encrypted` prop on `MediaPlayer` to use `/_assets` with the Burn-Once handshake. See `docs/crypto.md` for the full pipeline.
