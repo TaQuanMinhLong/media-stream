@@ -25,19 +25,19 @@ pub fn derive_key_napi(session_id: String, salt: Buffer) -> Result<Buffer> {
     Ok(Buffer::from(key.to_vec()))
 }
 
-/// Open a sealed WebP blob (decrypt + decompress). For testing and verification.
-#[napi(js_name = "openSealedData")]
-pub fn open_sealed_data_napi(data: Buffer, secret_key: Buffer) -> Result<Buffer> {
-    let key: [u8; 32] = secret_key
-        .as_ref()
-        .try_into()
-        .map_err(|_| Error::from_reason("secret_key must be exactly 32 bytes"))?;
+// /// Open a sealed WebP blob (decrypt + decompress). For testing and verification.
+// #[napi(js_name = "openSealedData")]
+// pub fn open_sealed_data_napi(data: Buffer, secret_key: Buffer) -> Result<Buffer> {
+//     let key: [u8; 32] = secret_key
+//         .as_ref()
+//         .try_into()
+//         .map_err(|_| Error::from_reason("secret_key must be exactly 32 bytes"))?;
 
-    let opened = media_core::secret::open_sealed_data(data.as_ref(), &key)
-        .ok_or_else(|| Error::from_reason("open_sealed_data failed (wrong key or corrupted)"))?;
+//     let opened = media_core::secret::open_sealed_data(data.as_ref(), &key)
+//         .ok_or_else(|| Error::from_reason("open_sealed_data failed (wrong key or corrupted)"))?;
 
-    Ok(Buffer::from(opened))
-}
+//     Ok(Buffer::from(opened))
+// }
 
 /// Seal each chunk and push the sealed blob to JS via the `on_chunk` callback.
 ///

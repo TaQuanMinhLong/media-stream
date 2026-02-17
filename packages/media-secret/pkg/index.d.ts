@@ -3,9 +3,6 @@
 /** Derive a 32-byte key from session_id + salt using Argon2id. */
 export declare function deriveKey(sessionId: string, salt: Buffer): Buffer
 
-/** Open a sealed WebP blob (decrypt + decompress). For testing and verification. */
-export declare function openSealedData(data: Buffer, secretKey: Buffer): Buffer
-
 /**
  * Seal each chunk and push the sealed blob to JS via the `on_chunk` callback.
  *

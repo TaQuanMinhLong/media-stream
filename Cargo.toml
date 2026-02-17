@@ -24,7 +24,7 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = [
 ] }
 zstd = "0.13"
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
-ruzstd = "0.7"
+ruzstd = "0.8"
 
 # NAPI (server-side native addon)
 napi = "3"

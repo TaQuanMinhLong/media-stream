@@ -104,7 +104,7 @@ pub fn open_sealed_data(data: &[u8], secret_key: &[u8; 32]) -> Option<Vec<u8>> {
 
     // Decompress with pure-Rust ruzstd (WASM-safe)
     use std::io::Read;
-    let mut decoder = ruzstd::StreamingDecoder::new(decrypted.as_slice()).ok()?;
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(decrypted.as_slice()).ok()?;
     let mut output = Vec::new();
     decoder.read_to_end(&mut output).ok()?;
     Some(output)
