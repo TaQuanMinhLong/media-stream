@@ -98,7 +98,8 @@ new Elysia()
       return "File not found";
     }
 
-    const sealed = sealData(await fileRef.bytes(), secretKey.key);
+    const bytes = await fileRef.bytes();
+    const sealed = sealData(bytes, secretKey.key);
 
     return new Response(sealed, {
       headers: {
