@@ -80,34 +80,71 @@ pub fn seal_data(data: &[u8], secret_key: &[u8; 32]) -> Result<Vec<u8>, SealErro
     Ok(payload)
 }
 
+#[derive(Debug)]
+pub enum OpenSealedDataError {
+    InvalidWebp,
+    NotEnoughData,
+    MalformedData,
+    DecryptionFailed(chacha20poly1305::aead::Error),
+    FrameDecoderError(ruzstd::decoding::errors::FrameDecoderError),
+    DecompressionFailed(std::io::Error),
+}
+
+impl std::fmt::Display for OpenSealedDataError {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenSealedDataError::InvalidWebp => write!(f, "invalid WebP file"),
+            OpenSealedDataError::NotEnoughData => write!(f, "not enough data"),
+            OpenSealedDataError::MalformedData => write!(f, "malformed data"),
+            OpenSealedDataError::DecryptionFailed(e) => write!(f, "decryption failed: {e}"),
+            OpenSealedDataError::FrameDecoderError(e) => write!(f, "frame decoder error: {e}"),
+            OpenSealedDataError::DecompressionFailed(e) => write!(f, "decompression failed: {e}"),
+        }
+    }
+}
+
 /// Open a sealed WebP blob: parse RIFF end → extract nonce + ciphertext →
 /// decrypt (ChaCha20-Poly1305) → decompress (pure-Rust ruzstd).
 ///
 /// Returns `None` if the data is malformed or authentication fails.
-pub fn open_sealed_data(data: &[u8], secret_key: &[u8; 32]) -> Option<Vec<u8>> {
+pub fn open_sealed_data(
+    data: &[u8],
+    secret_key: &[u8; 32],
+) -> Result<Vec<u8>, OpenSealedDataError> {
     if data.len() < 12 || &data[0..4] != b"RIFF" {
-        return None;
+        return Err(OpenSealedDataError::InvalidWebp);
     }
 
-    let riff_size = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    let riff_size = u32::from_le_bytes(
+        data[4..8]
+            .try_into()
+            .map_err(|_| OpenSealedDataError::MalformedData)?,
+    ) as usize;
     let image_end = riff_size + 8;
 
     if data.len() <= image_end + 12 {
-        return None;
+        return Err(OpenSealedDataError::NotEnoughData);
     }
 
     let nonce = Nonce::from_slice(&data[image_end..image_end + 12]);
     let ciphertext = &data[image_end + 12..];
 
     let cipher = ChaCha20Poly1305::new(secret_key.into());
-    let decrypted = cipher.decrypt(nonce, ciphertext).ok()?;
+    let decrypted = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(OpenSealedDataError::DecryptionFailed)?;
 
     // Decompress with pure-Rust ruzstd (WASM-safe)
     use std::io::Read;
-    let mut decoder = ruzstd::decoding::StreamingDecoder::new(decrypted.as_slice()).ok()?;
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(decrypted.as_slice())
+        .map_err(OpenSealedDataError::FrameDecoderError)?;
     let mut output = Vec::new();
-    decoder.read_to_end(&mut output).ok()?;
-    Some(output)
+
+    decoder
+        .read_to_end(&mut output)
+        .map_err(OpenSealedDataError::DecompressionFailed)?;
+    Ok(output)
 }
 
 #[cfg(all(test, feature = "seal"))]
@@ -149,7 +186,7 @@ mod tests {
         let data = b"secret";
         let sealed = seal_data(data, &key).expect("seal_data");
         assert!(
-            open_sealed_data(&sealed, &wrong_key).is_none(),
+            open_sealed_data(&sealed, &wrong_key).is_err(),
             "wrong key must fail"
         );
     }

@@ -138,7 +138,7 @@ export function useMediaPlayer(
     }
   });
 
-  function initVideo(initBuffer: ArrayBuffer) {
+  function initVideo(initBuffer: Uint8Array) {
     const client = playerRef.value;
     if (!client) return console.error("Client not found");
     try {
@@ -148,7 +148,7 @@ export function useMediaPlayer(
     }
   }
 
-  function initAudio(initBuffer: ArrayBuffer): void {
+  function initAudio(initBuffer: Uint8Array): void {
     const client = playerRef.value;
     if (!client) return;
     try {
@@ -158,7 +158,7 @@ export function useMediaPlayer(
     }
   }
 
-  function feedVideoSegment(buffer: ArrayBuffer) {
+  function feedVideoSegment(buffer: Uint8Array) {
     const client = playerRef.value;
     if (!client) return console.error("Client not found");
     try {
@@ -168,7 +168,7 @@ export function useMediaPlayer(
     }
   }
 
-  function feedAudioSegment(buffer: ArrayBuffer): void {
+  function feedAudioSegment(buffer: Uint8Array): void {
     const client = playerRef.value;
     if (!client) return;
     try {
@@ -188,8 +188,8 @@ export function useMediaPlayer(
     try {
       const res = await fetch(url, { signal: abort.signal, credentials: fetchCredentials });
       if (!res.ok) throw new Error("Video chunk failed");
-      const buf = await res.arrayBuffer();
-      if (!abort.signal.aborted) feedVideoSegment(buf);
+      const bytes = await res.bytes();
+      if (!abort.signal.aborted) feedVideoSegment(bytes);
       if (videoSegIdx.value === idx) videoSegIdx.value++;
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -211,8 +211,8 @@ export function useMediaPlayer(
     try {
       const res = await fetch(url, { signal: abort.signal, credentials: fetchCredentials });
       if (!res.ok) throw new Error("Audio chunk failed");
-      const buf = await res.arrayBuffer();
-      if (!abort.signal.aborted) feedAudioSegment(buf);
+      const bytes = await res.bytes();
+      if (!abort.signal.aborted) feedAudioSegment(bytes);
       if (audioSegIdx.value === idx) audioSegIdx.value++;
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -260,7 +260,7 @@ export function useMediaPlayer(
         fetch(`${baseSegmentUrl}/${meta.video.initUrl}`, { credentials: fetchCredentials }),
         fetch(`${baseSegmentUrl}/${meta.audio.initUrl}`, { credentials: fetchCredentials }),
       ]);
-      const [vInit, aInit] = await Promise.all([vRes.arrayBuffer(), aRes.arrayBuffer()]);
+      const [vInit, aInit] = await Promise.all([vRes.bytes(), aRes.bytes()]);
       initVideo(vInit);
       initAudio(aInit);
       hasInitialized.value = true;

@@ -122,25 +122,29 @@ impl VideoPlayer {
         }
     }
 
+    /// This requires ArrayBuffer to be transferred to the worker.
     #[inline]
-    pub(crate) fn send_video_init(&self, buffer: JsValue) -> Result<(), JsValue> {
+    pub(crate) fn send_video_init(&self, buffer: js_sys::ArrayBuffer) -> Result<(), JsValue> {
         let worker = self.worker.borrow();
         let w = worker
             .as_ref()
             .ok_or_else(|| JsValue::from_str("Worker not initialized"))?;
-        let obj = Self::build_message_object("INIT_VIDEO", &[("buffer", buffer.clone())]);
-        w.post_message_with_transfer(&obj, &js_sys::Array::of1(&buffer))?;
+        let transfer = js_sys::Array::of1(&buffer);
+        let obj = Self::build_message_object("INIT_VIDEO", &[("buffer", buffer.into())]);
+        w.post_message_with_transfer(&obj, &transfer)?;
         Ok(())
     }
 
+    /// This requires ArrayBuffer to be transferred to the worker.
     #[inline]
-    pub(crate) fn send_video_segment(&self, buffer: JsValue) -> Result<(), JsValue> {
+    pub(crate) fn send_video_segment(&self, buffer: js_sys::ArrayBuffer) -> Result<(), JsValue> {
         let worker = self.worker.borrow();
         let w = worker
             .as_ref()
             .ok_or_else(|| JsValue::from_str("Worker not initialized"))?;
-        let obj = Self::build_message_object("FEED_VIDEO_SEGMENT", &[("buffer", buffer.clone())]);
-        w.post_message_with_transfer(&obj, &js_sys::Array::of1(&buffer))?;
+        let transfer = js_sys::Array::of1(&buffer);
+        let obj = Self::build_message_object("FEED_VIDEO_SEGMENT", &[("buffer", buffer.into())]);
+        w.post_message_with_transfer(&obj, &transfer)?;
         Ok(())
     }
 

@@ -10,8 +10,6 @@ use web_sys::{
     EncodedAudioChunkType, GainNode,
 };
 
-use crate::video::VideoPlayer;
-
 /// Main-thread audio player: AudioContext, decoder, scheduling state.
 pub(crate) struct AudioPlayer {
     audio_ctx: RefCell<Option<AudioContext>>,
@@ -59,14 +57,10 @@ impl AudioPlayer {
 
     pub(crate) fn init(
         &self,
-        buffer: JsValue,
+        init_buf: &[u8],
         current_time: Rc<RefCell<f64>>,
     ) -> Result<(), JsValue> {
-        let buffer = buffer
-            .dyn_into::<js_sys::ArrayBuffer>()
-            .map_err(|_| JsValue::from_str("initAudio: expected ArrayBuffer"))?;
-        let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-        let init_result = match parse_audio_init(&bytes) {
+        let init_result = match parse_audio_init(init_buf) {
             Some(r) => r,
             None => return Err(JsValue::from_str("initAudio: parse failed")),
         };
@@ -148,15 +142,14 @@ impl AudioPlayer {
         Ok(())
     }
 
-    pub(crate) fn feed_segment(&self, buffer: JsValue, video: &VideoPlayer) -> Result<(), JsValue> {
-        let bytes = AudioPlayer::buffer_to_bytes(buffer, "feedAudioSegment: expected ArrayBuffer")?;
+    pub(crate) fn feed_segment(&self, segment_buf: &[u8]) -> Result<(), JsValue> {
         let timescale = *self.audio_timescale.borrow();
-        let media_result = match parse_audio_media(&bytes, timescale) {
+        let media_result = match parse_audio_media(segment_buf, timescale) {
             Some(r) => r,
             None => return Ok(()),
         };
 
-        self.notify_audio_buffered_end(&media_result, video);
+        self.notify_audio_buffered_end(&media_result);
 
         let schedule_rc = match self.schedule_queue.borrow().as_ref() {
             Some(r) => Rc::clone(r),
@@ -322,31 +315,12 @@ impl AudioPlayer {
         let _ = source.start_with_when(scheduled_at);
     }
 
-    /// Convert a JS `ArrayBuffer` into a Rust `Vec<u8>` with a contextual error message.
-    #[inline]
-    fn buffer_to_bytes(buffer: JsValue, context: &str) -> Result<Vec<u8>, JsValue> {
-        let buffer = buffer
-            .dyn_into::<js_sys::ArrayBuffer>()
-            .map_err(|_| JsValue::from_str(context))?;
-        let len = buffer.byte_length() as usize;
-        let arr = js_sys::Uint8Array::new(&buffer);
-        let mut bytes = vec![0u8; len];
-        arr.copy_to(&mut bytes[..]);
-        Ok(bytes)
-    }
-
     /// Update audio buffered end from media_result and notify video side, if any.
     #[inline]
-    fn notify_audio_buffered_end(
-        &self,
-        media_result: &media_core::AudioMediaResult,
-        _video: &VideoPlayer,
-    ) {
+    fn notify_audio_buffered_end(&self, media_result: &media_core::AudioMediaResult) {
         if let Some(last) = media_result.samples.last() {
             let end_sec = (last.timestamp_us + last.duration_us) as f64 / 1_000_000.0;
             *self.audio_buffered_end.borrow_mut() = end_sec;
-            // Video side no longer forwards this to the worker; only the main thread
-            // (MediaPlayer / composable) consumes audio buffered end.
         }
     }
 

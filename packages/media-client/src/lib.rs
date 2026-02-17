@@ -109,32 +109,32 @@ impl MediaPlayer {
 
     /// Send video init segment. Encrypted buffer is decrypted internally before transfer to worker.
     #[wasm_bindgen(js_name = "initVideo")]
-    pub fn init_video(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
-        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
+    pub fn init_video(&self, buffer: &[u8]) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt_as_buffer(buffer, &self.secret_key)?;
         self.video.send_video_init(decrypted)
     }
 
     /// Send one video media segment. Encrypted buffer is decrypted internally before transfer to worker.
     #[wasm_bindgen(js_name = "feedVideoSegment")]
-    pub fn feed_video_segment(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
-        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
+    pub fn feed_video_segment(&self, buffer: &[u8]) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt_as_buffer(buffer, &self.secret_key)?;
         self.video.send_video_segment(decrypted)
     }
 
     /// Initialize audio on main thread (AudioContext cannot be created in worker).
     /// Encrypted buffer is decrypted internally before parsing.
     #[wasm_bindgen(js_name = "initAudio")]
-    pub fn init_audio(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
-        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
-        self.audio.init(decrypted, self.current_time.clone())
+    pub fn init_audio(&self, buffer: &[u8]) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt(buffer, &self.secret_key)?;
+        self.audio.init(&decrypted, self.current_time.clone())
     }
 
     /// Feed one audio media segment; decode and schedule on main thread, post SET_AUDIO_BUFFERED_END to worker.
     /// Encrypted buffer is decrypted internally.
     #[wasm_bindgen(js_name = "feedAudioSegment")]
-    pub fn feed_audio_segment(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
-        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
-        self.audio.feed_segment(decrypted, &self.video)
+    pub fn feed_audio_segment(&self, buffer: &[u8]) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt(buffer, &self.secret_key)?;
+        self.audio.feed_segment(&decrypted)
     }
 
     /// Get the latest audio buffered end (seconds) from the main-thread audio pipeline.
@@ -155,23 +155,32 @@ impl MediaPlayer {
         self.audio.set_muted(muted);
     }
 
-    /// Decrypt sealed buffer; returns ArrayBuffer as JsValue for downstream use.
-    fn decrypt_buffer(
-        buffer: ArrayBuffer,
+    /// Decrypt sealed buffer; returns ArrayBuffer
+    #[inline]
+    fn decrypt_as_buffer(
+        buffer: &[u8],
         secret_key: &Rc<RefCell<Option<[u8; 32]>>>,
-    ) -> Result<JsValue, JsValue> {
-        let arr = js_sys::Uint8Array::new(buffer.as_ref());
-        let len = arr.byte_length() as usize;
-        let mut bytes = vec![0u8; len];
-        arr.copy_to(&mut bytes[..]);
+    ) -> Result<ArrayBuffer, JsValue> {
         let key = secret_key
             .borrow()
             .ok_or_else(|| JsValue::from_str("handshake required"))?;
-        let decrypted = media_core::secret::open_sealed_data(&bytes, &key)
-            .ok_or_else(|| JsValue::from_str("decryption failed"))?;
-        let out = js_sys::Uint8Array::new_with_length(decrypted.len() as u32);
-        out.copy_from(&decrypted);
-        Ok(out.buffer().into())
+        let decrypted = media_core::secret::open_sealed_data(buffer, &key)
+            .map_err(|e| JsValue::from(e.to_string()))?;
+        Ok(js_sys::Uint8Array::from(decrypted.as_slice()).buffer())
+    }
+
+    /// Decrypt sealed buffer; returns Vec<u8>
+    #[inline]
+    fn decrypt(
+        buffer: &[u8],
+        secret_key: &Rc<RefCell<Option<[u8; 32]>>>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let key = secret_key
+            .borrow()
+            .ok_or_else(|| JsValue::from_str("handshake required"))?;
+        let decrypted = media_core::secret::open_sealed_data(buffer, &key)
+            .map_err(|e| JsValue::from(e.to_string()))?;
+        Ok(decrypted)
     }
 
     /// Handshake: GET /media/init (salt binary), GET /media/session (sessionId),
