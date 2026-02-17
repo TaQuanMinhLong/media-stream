@@ -2,11 +2,13 @@
 build-wasm-client:
     cd packages/media-client && wasm-pack build --target web --release --out-dir pkg
     bun run scripts/patch-wasm-pkg-name.ts packages/media-client/pkg/package.json @media-stream/client
+    rm -rf packages/media-client/pkg/.gitignore
 
 # Build media-worker WASM (worker thread); set npm name to @media-stream/worker
 build-wasm-worker:
     cd packages/media-worker && wasm-pack build --target web --release --out-dir pkg
     bun run scripts/patch-wasm-pkg-name.ts packages/media-worker/pkg/package.json @media-stream/worker
+    rm -rf packages/media-worker/pkg/.gitignore
 
 # Build media-secret NAPI addon (server-side encryption)
 build-napi-secret:

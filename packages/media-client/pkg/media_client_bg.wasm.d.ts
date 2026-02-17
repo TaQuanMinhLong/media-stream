@@ -1,0 +1,35 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_mediaplayer_free: (a: number, b: number) => void;
+export const mediaplayer_feedAudioSegment: (a: number, b: number, c: number) => [number, number];
+export const mediaplayer_feedVideoSegment: (a: number, b: number, c: number) => [number, number];
+export const mediaplayer_getAudioBufferedEnd: (a: number) => number;
+export const mediaplayer_handshake: (a: number, b: number, c: number) => any;
+export const mediaplayer_initAudio: (a: number, b: number, c: number) => [number, number];
+export const mediaplayer_initCanvas: (a: number, b: any) => void;
+export const mediaplayer_initVideo: (a: number, b: number, c: number) => [number, number];
+export const mediaplayer_initWorker: (a: number, b: number, c: number) => [number, number];
+export const mediaplayer_new: () => number;
+export const mediaplayer_pause: (a: number) => void;
+export const mediaplayer_play: (a: number) => void;
+export const mediaplayer_seek: (a: number, b: number) => void;
+export const mediaplayer_setMuted: (a: number, b: number) => void;
+export const mediaplayer_setOnError: (a: number, b: any) => void;
+export const mediaplayer_setOnReady: (a: number, b: any) => void;
+export const mediaplayer_setOnStateUpdate: (a: number, b: any) => void;
+export const mediaplayer_setVolume: (a: number, b: number) => void;
+export const mediaplayer_terminate: (a: number) => void;
+export const mediaplayer_tick: (a: number) => void;
+export const wasm_bindgen_2a44ac06cfb9dcc1___closure__destroy___dyn_core_8ddcb40e007440f7___ops__function__Fn__web_sys_e8911d6d7654a6a3___features__gen_AudioData__AudioData____Output_______: (a: number, b: number) => void;
+export const wasm_bindgen_2a44ac06cfb9dcc1___convert__closures_____invoke___wasm_bindgen_2a44ac06cfb9dcc1___JsValue__wasm_bindgen_2a44ac06cfb9dcc1___JsValue_____: (a: number, b: number, c: any, d: any) => void;
+export const wasm_bindgen_2a44ac06cfb9dcc1___convert__closures_____invoke___wasm_bindgen_2a44ac06cfb9dcc1___JsValue_____: (a: number, b: number, c: any) => void;
+export const wasm_bindgen_2a44ac06cfb9dcc1___convert__closures_____invoke___web_sys_e8911d6d7654a6a3___features__gen_AudioData__AudioData_____: (a: number, b: number, c: any) => void;
+export const wasm_bindgen_2a44ac06cfb9dcc1___convert__closures_____invoke______: (a: number, b: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_start: () => void;

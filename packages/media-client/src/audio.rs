@@ -77,16 +77,16 @@ impl AudioPlayer {
         gain.connect_with_audio_node(ctx.destination().as_ref())?;
         let schedule: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
         let sources: Rc<RefCell<Vec<AudioBufferSourceNode>>> = Rc::new(RefCell::new(Vec::new()));
-        let current_time = Rc::clone(&current_time);
-        let seek_time = Rc::clone(&self.seek_time);
+        let current_time = current_time.clone();
+        let seek_time = self.seek_time.clone();
         let gain_cb = gain.clone();
         let ctx_cb = ctx.clone();
-        let schedule_cb = Rc::clone(&schedule);
-        let sources_cb = Rc::clone(&sources);
+        let schedule_cb = schedule.clone();
+        let sources_cb = sources.clone();
         // Anchor-based scheduling: clone Rc handles so the output closure and
         // seek() share the same state.  Reset to -1 on seek.
-        let anchor_ctx_cb = Rc::clone(&self.anchor_ctx);
-        let anchor_when_cb = Rc::clone(&self.anchor_when);
+        let anchor_ctx_cb = self.anchor_ctx.clone();
+        let anchor_when_cb = self.anchor_when.clone();
         let output = Closure::wrap(Box::new(move |data: AudioData| {
             let when = match schedule_cb.borrow_mut().drain(..1).next() {
                 Some(w) => w,
@@ -134,8 +134,8 @@ impl AudioPlayer {
         *self.audio_ctx.borrow_mut() = Some(ctx.clone());
         *self.gain_node.borrow_mut() = Some(gain);
         *self.audio_decoder.borrow_mut() = Some(decoder);
-        *self.schedule_queue.borrow_mut() = Some(Rc::clone(&schedule));
-        *self.active_sources.borrow_mut() = Some(Rc::clone(&sources));
+        *self.schedule_queue.borrow_mut() = Some(schedule.clone());
+        *self.active_sources.borrow_mut() = Some(sources.clone());
         *self.audio_timescale.borrow_mut() = init_result.timescale;
         *self.last_audio_config.borrow_mut() = Some(config);
         let _ = ctx.suspend();
@@ -152,7 +152,7 @@ impl AudioPlayer {
         self.notify_audio_buffered_end(&media_result);
 
         let schedule_rc = match self.schedule_queue.borrow().as_ref() {
-            Some(r) => Rc::clone(r),
+            Some(r) => r.clone(),
             None => return Ok(()),
         };
         let decoder = match self.audio_decoder.borrow().as_ref() {
@@ -399,14 +399,7 @@ impl AudioPlayer {
     #[inline]
     fn reset_audio_decoder(&self) {
         if let Some(ref decoder) = *self.audio_decoder.borrow() {
-            let _ = js_sys::Reflect::apply(
-                &js_sys::Reflect::get(decoder.as_ref(), &JsValue::from_str("reset"))
-                    .unwrap_or(JsValue::UNDEFINED)
-                    .dyn_into::<js_sys::Function>()
-                    .unwrap_or_else(|_| js_sys::Function::new_no_args("")),
-                decoder.as_ref(),
-                &js_sys::Array::new(),
-            );
+            let _ = decoder.reset();
             if let Some(ref config) = *self.last_audio_config.borrow() {
                 let _ = decoder.configure(config);
             }

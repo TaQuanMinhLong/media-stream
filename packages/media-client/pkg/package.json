@@ -1,0 +1,15 @@
+{
+  "name": "@media-stream/client",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "media_client_bg.wasm",
+    "media_client.js",
+    "media_client.d.ts"
+  ],
+  "main": "media_client.js",
+  "types": "media_client.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

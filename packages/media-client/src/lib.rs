@@ -187,7 +187,7 @@ impl MediaPlayer {
     #[wasm_bindgen(js_name = "handshake")]
     pub fn handshake(&self, base_url: &str) -> js_sys::Promise {
         let base = base_url.trim_end_matches('/').to_string();
-        let secret_key = Rc::clone(&self.secret_key);
+        let secret_key = self.secret_key.clone();
         future_to_promise(async move {
             let client = reqwest::Client::new();
             let init_url = format!("{}/media/init", base);

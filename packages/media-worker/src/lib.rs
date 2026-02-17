@@ -8,6 +8,7 @@ mod message;
 use media_core::{VideoSample, parse_video_init, parse_video_media};
 use message::*;
 use std::cell::RefCell;
+use std::collections::BinaryHeap;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -58,8 +59,38 @@ struct GpuState {
     sampler: GpuSampler,
 }
 
+struct TimedFrame {
+    timestamp_us: f64,
+    frame: VideoFrame,
+}
+
+impl PartialEq for TimedFrame {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.timestamp_us == other.timestamp_us
+    }
+}
+
+impl Eq for TimedFrame {}
+
+impl Ord for TimedFrame {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse here to make BinaryHeap a min-heap
+        other
+            .timestamp_us
+            .partial_cmp(&self.timestamp_us)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+impl PartialOrd for TimedFrame {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other)) // canonical
+    }
+}
 /// Frame queue shared with decoder output callback.
-type FrameQueue = Rc<RefCell<Vec<(VideoFrame, f64)>>>;
+type FrameQueue = Rc<RefCell<BinaryHeap<TimedFrame>>>;
 
 /// Media worker: holds all video state; GPU is passed from JS via init_with_gpu.
 /// Audio pipeline runs on the main thread; the worker does not track audio buffering
@@ -146,8 +177,7 @@ impl MediaWorker {
             "PLAY" => self.play(),
             "PAUSE" => self.pause(),
             "SEEK" => {
-                let time = parse_seek_time(&data);
-                self.seek(time);
+                self.seek(parse_seek_time(&data));
             }
             "INIT_VIDEO" => self.init_video(&data),
             "FEED_VIDEO_SEGMENT" => self.feed_segment(&data),
@@ -205,8 +235,8 @@ impl MediaWorker {
     fn clear_frame_queue(&mut self) {
         if let Some(ref rc) = self.frame_queue {
             let mut queue = rc.borrow_mut();
-            for (frame, _) in queue.drain(..) {
-                frame.close();
+            for frame in queue.drain() {
+                frame.frame.close();
             }
         }
     }
@@ -249,7 +279,7 @@ impl MediaWorker {
         };
 
         self.clear_frame_queue();
-        self.frame_queue = Some(Rc::clone(&queue));
+        self.frame_queue = Some(queue.clone());
 
         let (decoder, config) = match Self::create_and_configure_decoder(config, queue) {
             Some(dc) => dc,
@@ -309,28 +339,32 @@ impl MediaWorker {
     fn drain_frame_for_display(&mut self) {
         let current_time_us = self.state.current_time * 1_000_000.0;
         let queue_rc = match &self.frame_queue {
-            Some(rc) => Rc::clone(rc),
+            Some(rc) => rc.clone(),
             None => return,
         };
         let mut queue = queue_rc.borrow_mut();
-        let mut best: Option<(VideoFrame, f64)> = None;
+        let mut best: Option<TimedFrame> = None;
         let mut drained = 0u32;
         while drained < 16
             && !queue.is_empty()
             && queue
-                .first()
-                .map(|(_, ts)| *ts <= current_time_us)
+                .peek()
+                .map(|frame| frame.timestamp_us <= current_time_us)
                 .unwrap_or(false)
         {
             if let Some(b) = best.take() {
-                b.0.close();
+                b.frame.close();
             }
-            best = queue.drain(..1).next();
+            best = queue.pop();
             drained += 1;
         }
-        if let Some((frame, ts_us)) = best {
+        if let Some(TimedFrame {
+            frame,
+            timestamp_us,
+        }) = best
+        {
             if self.seek_target_us >= 0 {
-                if ts_us < (self.seek_target_us as f64) - 200_000.0 {
+                if timestamp_us < (self.seek_target_us as f64) - 200_000.0 {
                     frame.close();
                     return;
                 }
@@ -392,9 +426,7 @@ impl MediaWorker {
         let config = VideoDecoderConfig::new(&codec);
         config.set_description(desc_obj.as_ref());
         config.set_optimize_for_latency(true);
-
-        let queue: FrameQueue = Rc::new(RefCell::new(Vec::new()));
-        Some((config, queue))
+        Some((config, FrameQueue::default()))
     }
 
     #[inline]
@@ -402,16 +434,18 @@ impl MediaWorker {
         config: VideoDecoderConfig,
         queue: FrameQueue,
     ) -> Option<(VideoDecoder, VideoDecoderConfig)> {
-        let queue_clone = Rc::clone(&queue);
         let output = Closure::wrap(Box::new(move |frame: VideoFrame| {
             let timestamp_us = frame.timestamp().unwrap_or(0.0);
-            let mut q = queue_clone.borrow_mut();
-            if q.len() >= MAX_FRAME_QUEUE {
-                let (old, _) = q.remove(0);
-                old.close();
+            let mut q = queue.borrow_mut();
+            if q.len() >= MAX_FRAME_QUEUE
+                && let Some(old) = q.pop()
+            {
+                old.frame.close();
             }
-            q.push((frame, timestamp_us));
-            q.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            q.push(TimedFrame {
+                timestamp_us,
+                frame,
+            });
         }) as Box<dyn Fn(VideoFrame)>);
         let error_cb = Closure::wrap(Box::new(|| {}) as Box<dyn FnMut()>);
         let init_obj = VideoDecoderInit::new(

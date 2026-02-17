@@ -60,10 +60,10 @@ impl VideoPlayer {
         options.set_type(WorkerType::Module);
         let worker = Worker::new_with_options(worker_url, &options)?;
         let worker_for_closure = worker.clone();
-        let pending_canvas = Rc::clone(&self.pending_canvas);
-        let on_state = Rc::clone(&self.listeners.on_state_update);
-        let on_ready = Rc::clone(&self.listeners.on_ready);
-        let on_error = Rc::clone(&self.listeners.on_error);
+        let pending_canvas = self.pending_canvas.clone();
+        let on_state = self.listeners.on_state_update.clone();
+        let on_ready = self.listeners.on_ready.clone();
+        let on_error = self.listeners.on_error.clone();
 
         let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
             let data = event.data();

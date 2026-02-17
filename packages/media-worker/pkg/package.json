@@ -1,0 +1,15 @@
+{
+  "name": "@media-stream/worker",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "media_worker_bg.wasm",
+    "media_worker.js",
+    "media_worker.d.ts"
+  ],
+  "main": "media_worker.js",
+  "types": "media_worker.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
