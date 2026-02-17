@@ -287,7 +287,7 @@ impl MediaWorker {
         while !self.pending_samples.is_empty() && decoder.decode_queue_size() < HIGH_WATER_DECODE {
             let sample = self.pending_samples.remove(0);
             let data = js_sys::Uint8Array::new_with_length(sample.data.len() as u32);
-            data.copy_from(&sample.data[..]);
+            data.copy_from(&sample.data);
             let chunk_type = if sample.is_key {
                 EncodedVideoChunkType::Key
             } else {
@@ -376,7 +376,7 @@ fn extract_array_buffer_bytes(data: &JsValue, field: &str) -> Option<Vec<u8>> {
     let len = buffer.byte_length() as usize;
     let arr = js_sys::Uint8Array::new(&buffer);
     let mut bytes = vec![0u8; len];
-    arr.copy_to(&mut bytes[..]);
+    arr.copy_to(&mut bytes);
     Some(bytes)
 }
 
@@ -388,7 +388,7 @@ impl MediaWorker {
         let codec = init_result.codec;
         let description = init_result.description;
         let desc_obj = js_sys::Uint8Array::new_with_length(description.len() as u32);
-        desc_obj.copy_from(&description[..]);
+        desc_obj.copy_from(&description);
         let config = VideoDecoderConfig::new(&codec);
         config.set_description(desc_obj.as_ref());
         config.set_optimize_for_latency(true);

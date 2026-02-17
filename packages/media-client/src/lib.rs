@@ -7,7 +7,6 @@ mod listeners;
 mod video;
 
 use audio::AudioPlayer;
-use js_sys::ArrayBuffer;
 use std::cell::RefCell;
 use std::rc::Rc;
 use video::VideoPlayer;
@@ -160,7 +159,7 @@ impl MediaPlayer {
     fn decrypt_as_buffer(
         buffer: &[u8],
         secret_key: &Rc<RefCell<Option<[u8; 32]>>>,
-    ) -> Result<ArrayBuffer, JsValue> {
+    ) -> Result<js_sys::ArrayBuffer, JsValue> {
         let key = secret_key
             .borrow()
             .ok_or_else(|| JsValue::from_str("handshake required"))?;

@@ -284,7 +284,7 @@ impl AudioPlayer {
             {
                 return None;
             }
-            float32.copy_to(&mut f32_buf[..]);
+            float32.copy_to(&mut f32_buf);
             let _ = buf.copy_to_channel(&f32_buf, i as i32);
         }
 
@@ -349,7 +349,7 @@ impl AudioPlayer {
     ) {
         for sample in samples {
             let data_arr = js_sys::Uint8Array::new_with_length(sample.data.len() as u32);
-            data_arr.copy_from(&sample.data[..]);
+            data_arr.copy_from(&sample.data);
             let init = EncodedAudioChunkInit::new(
                 data_arr.as_ref(),
                 sample.timestamp_us as f64,
