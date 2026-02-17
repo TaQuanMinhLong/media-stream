@@ -4,13 +4,13 @@ The process is divided into the Sender (Server) and the Receiver (Client), with 
 
 ## 1. The Handshake (Burn-Once-Dest-Check)
 
-### Step 1: `/_init`
+### Step 1: `/media/init`
 
 - **Server**: Creates a random `sessionId` (UUID), generates 16-byte salt via `crypto.getRandomValues`, sets HttpOnly cookie `media-session-id`, derives key with `deriveKey(sessionId, salt)`, stores `{ key, isDirty }` in SECRETS.
 - **Response**: Salt as binary body (`Content-Type: application/octet-stream`).
 - **MediaPlayer**: Fetches via reqwest (WASM), receives salt; cookie is set by browser.
 
-### Step 2: `/_session`
+### Step 2: `/media/session`
 
 - **Guards**: Cookie must be present; rejects if `isDirty === true`. After a valid response, sets `isDirty = true` (atomic burn-once).
 - **Response**: Plain string `sessionId` on success, empty string `""` if invalid or already burned.
@@ -59,6 +59,9 @@ Encryption runs on the **server** via **NAPI** (`media-secret` crate). The serve
 
 Endpoint: `GET /_assets/:asset/:file` → serves sealed WebP with `Content-Type: image/webp`.
 
+**Filename mangling**: The client requests image-like names; the server demangles to real media files:
+- `image-0.webp` → `init-0.mp4`, `image-0-00001.webp` → `chunk-0-00001.m4s`
+
 ### Server Streaming: Binary Response
 
 Elysia JSON-serializes handlers that return a raw `ReadableStream`, which corrupts binary payloads. To preserve binary, wrap the stream in a `Response`:
@@ -76,9 +79,9 @@ Tests in `services/server/src/crypto.test.ts` verify round-trip and streaming be
 
 Fetch: The Vue composable fetches sealed WebP from `/_assets/:asset/:file` with `credentials: "include"` (cookie sent).
 
-Decryption: **MediaPlayer** (main-thread WASM, `media-client` crate) holds the derived key and calls `decryptSegment(encrypted)` before feeding segments to the worker. Uses `media-core::secret::open_sealed_data` (parse RIFF → extract nonce + ciphertext → decrypt → decompress with ruzstd).
+Decryption: **MediaPlayer** (`media-client` WASM) holds the derived key. Encrypted buffers are passed directly to `initVideo`, `feedVideoSegment`, `initAudio`, and `feedAudioSegment`. Decryption happens internally in these methods via `media-core::secret::open_sealed_data` (parse RIFF → extract nonce + ciphertext → decrypt → decompress with ruzstd). Decrypted bytes never leave WASM memory.
 
-Feed: Raw fMP4 bytes are passed to the worker via `feedVideoSegment` / `feedAudioSegment`. The worker receives only raw segments — no decryption, no key.
+Feed: Raw fMP4 bytes flow from the decryption step to the worker (video) or main-thread decoder (audio). The worker receives only raw segments — no decryption, no key.
 
 ### Execution Context
 
@@ -110,13 +113,13 @@ Visual Output: Only the final, flattened pixels are shown on the user's screen, 
          ┌───────────────▼──┐   ┌─────▼───────────────────┐
          │   media-secret   │   │   media-client (WASM)  │
          │    (NAPI)        │   │  • handshake, derive   │
-         │   • seal feat.   │   │  • decryptSegment      │
+         │   • seal feat.   │   │  • internal decrypt   │
          │   • cdylib       │   │  • holds key only      │
          └────────────┬─────┘   └─────────────┬─────────┘
                       │                       │ raw fMP4
            ┌──────────▼──────┐        ┌───────▼──────────┐
            │  Elysia Server  │        │  media-worker    │
-           │ /_init, /_session│       │  (WASM)          │
+           │ /media/init, /media/session│       │  (WASM)          │
            │ /_assets/:asset/:file    │  • raw decode only│
            └─────────────────┘       └───────────────────┘
 ```
@@ -125,8 +128,8 @@ Visual Output: Only the final, flattened pixels are shown on the user's screen, 
 
 | Endpoint                      | Purpose                                      | Content-Type                              |
 |-------------------------------|----------------------------------------------|-------------------------------------------|
-| `/_init`                      | Handshake: create session, set cookie, return salt binary | `application/octet-stream` |
-| `/_session`                   | Handshake: return sessionId once (cookie + burn) | `text/plain`                |
+| `/media/init`                 | Handshake: create session, set cookie, return salt binary | `application/octet-stream` |
+| `/media/session`              | Handshake: return sessionId once (cookie + burn) | `text/plain`                |
 | `/media/:asset/metadata.json` | Metadata                                     | `application/json`                        |
 | `/media/:asset/:file`         | Raw CMAF chunks (non-encrypted, for testing) | `video/iso.segment` \| `video/mp4`         |
 | `/_assets/:asset/:file`       | Sealed WebP chunks (encrypted, requires cookie) | `image/webp`                            |

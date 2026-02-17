@@ -23,9 +23,18 @@ function safeResolve(...segments: string[]) {
   return resolved;
 }
 
+/** Demangle image-like filename to real media file: image-0.webp -> init-0.mp4, image-0-00001.webp -> chunk-0-00001.m4s */
+function demangleAssetFilename(mangled: string): string {
+  const initMatch = mangled.match(/^image-(\d+)\.webp$/i);
+  if (initMatch) return `init-${initMatch[1]}.mp4`;
+  const chunkMatch = mangled.match(/^image-(\d+)-(\d+)\.webp$/i);
+  if (chunkMatch) return `chunk-${chunkMatch[1]}-${chunkMatch[2]}.m4s`;
+  return mangled;
+}
+
 new Elysia()
-  .get("/", () => ({ status: "Media Server Ready" }))
-  .get("/_session", async ({ cookie, set }) => {
+  .get("/", () => ({ status: "Media Server is online" }))
+  .get("/media/session", async ({ cookie, set }) => {
     const sessionId = cookie[COOKIE_NAME]?.value as string | undefined;
     if (!sessionId || !SECRETS.has(sessionId)) {
       set.headers["Content-Type"] = "text/plain";
@@ -40,7 +49,7 @@ new Elysia()
     set.headers["Content-Type"] = "text/plain";
     return sessionId;
   })
-  .get("/_init", async ({ cookie, set }) => {
+  .get("/media/init", async ({ cookie, set }) => {
     const sessionId = crypto.randomUUID();
     const salt = new Uint8Array(16);
     crypto.getRandomValues(salt);
@@ -67,31 +76,8 @@ new Elysia()
     set.headers["Cache-Control"] = "public, max-age=60";
     return fileRef;
   })
-
-  // MATCHES: /media/sample/chunk-0-00001.m4s
-  // TODO: remove this later when encrypted endpoint is ready
-  .get("/media/:asset/:file", async ({ params, set }) => {
-    const { asset, file } = params;
-
-    // Safety: ensure file exists before attempting to serve
-    const filePath = safeResolve(asset, file);
-    const fileRef = Bun.file(filePath);
-
-    if (!(await fileRef.exists())) {
-      set.status = 404;
-      console.error(`File not found: ${filePath}`);
-      return "File not found";
-    }
-
-    // Set correct headers for media streaming
-    set.headers["Content-Type"] = file.endsWith(".m4s") ? "video/iso.segment" : "video/mp4";
-    set.headers["Cache-Control"] = "public, max-age=31536000, immutable";
-
-    return fileRef;
-  })
-
   // Encrypted endpoint: serves sealed WebP wrapping the same chunk data.
-  // Client worker decrypts internally via media_core::secret::open_sealed_data.
+  // Client decrypts internally in WASM (media-client) via media_core::secret::open_sealed_data.
   .get("/_assets/:asset/:file", async ({ params, set, cookie }) => {
     const sessionId = cookie[COOKIE_NAME]?.value as string | undefined;
     const secretKey = sessionId ? SECRETS.get(sessionId) : undefined;
@@ -101,7 +87,8 @@ new Elysia()
     }
 
     const { asset, file } = params;
-    const filePath = safeResolve(asset, file);
+    const realFile = demangleAssetFilename(file);
+    const filePath = safeResolve(asset, realFile);
     const fileRef = Bun.file(filePath);
 
     if (!(await fileRef.exists())) {

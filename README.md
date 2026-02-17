@@ -152,4 +152,4 @@ All of these commands must be run from the repo root.
    just check
    ```
 
-5. **Encrypted mode**: Enable the `encrypted` prop on `MediaPlayer` to use `/_assets` with the Burn-Once handshake. See `docs/crypto.md` for the full pipeline.
+5. **Encrypted pipeline**: The client always uses `/_assets` with the Burn-Once handshake; buffers are decrypted internally in WASM. See `docs/crypto.md` for the full pipeline.

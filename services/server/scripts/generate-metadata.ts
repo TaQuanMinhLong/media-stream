@@ -71,6 +71,17 @@ function segmentTemplateFromChunks(
   return `chunk-${trackId}-${fmt}.m4s`;
 }
 
+/** Convert real media filenames to image-like names for _assets: init-0.mp4 -> image-0.webp, chunk-0-%05d.m4s -> image-0-%05d.webp */
+function toAssetFilename(filename: string): string {
+  if (filename.startsWith("init-") && filename.endsWith(".mp4")) {
+    return filename.replace(/^init-/, "image-").replace(/\.mp4$/, ".webp");
+  }
+  if (filename.startsWith("chunk-") && filename.endsWith(".m4s")) {
+    return filename.replace(/^chunk-/, "image-").replace(/\.m4s$/, ".webp");
+  }
+  return filename;
+}
+
 // Parse manifest.mpd if present (duration + optional segment timelines)
 let durationSec = 0;
 let videoTimescale = 12800;
@@ -144,8 +155,8 @@ const audioSegmentCount =
 const metadata = {
   durationSec,
   video: {
-    initUrl: videoInit?.filename ?? "init-0.mp4",
-    segmentTemplate: segmentTemplateFromChunks(videoTrackId, videoChunks),
+    initUrl: toAssetFilename(videoInit?.filename ?? "init-0.mp4"),
+    segmentTemplate: toAssetFilename(segmentTemplateFromChunks(videoTrackId, videoChunks)),
     segmentCount: videoSegmentCount,
     ...(videoSegmentDurationsSec && videoSegmentDurationsSec.length > 0
       ? { segmentDurationsSec: videoSegmentDurationsSec }
@@ -153,8 +164,8 @@ const metadata = {
     timescale: videoTimescale,
   },
   audio: {
-    initUrl: audioInit?.filename ?? "init-1.mp4",
-    segmentTemplate: segmentTemplateFromChunks(audioTrackId, audioChunks),
+    initUrl: toAssetFilename(audioInit?.filename ?? "init-1.mp4"),
+    segmentTemplate: toAssetFilename(segmentTemplateFromChunks(audioTrackId, audioChunks)),
     segmentCount: audioSegmentCount,
     ...(audioSegmentDurationsSec && audioSegmentDurationsSec.length > 0
       ? { segmentDurationsSec: audioSegmentDurationsSec }

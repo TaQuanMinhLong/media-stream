@@ -6,8 +6,6 @@ import { onMounted, ref, shallowRef, toValue } from "vue";
 import MediaWorkerURL from "../media-worker?worker&url";
 import { formatSegmentUrl, timeToSegmentIndex } from "../utils/seek-index";
 
-const DEFAULT_DECRYPT = (buf: ArrayBuffer): Promise<ArrayBuffer> => Promise.resolve(buf);
-
 let mediaPlayer: MediaPlayer | null = null;
 async function getMediaPlayer(): Promise<MediaPlayer> {
   if (mediaPlayer) return mediaPlayer;
@@ -22,27 +20,17 @@ export function useMediaPlayer(
   options: {
     assetId: string;
     metadataUrl?: string;
-    /** When true, use /_assets with handshake + MediaPlayer.decryptSegment. */
-    encrypted?: boolean;
-    /** Base URL for handshake (/_init, /_session). Defaults to window.location.origin. */
+    /** Base URL for handshake (/media/init, /media/session). Defaults to window.location.origin. */
     apiOrigin?: string;
-    decrypt?: (buf: ArrayBuffer) => Promise<ArrayBuffer>;
   },
 ) {
-  const { assetId, encrypted = false } = options;
+  const { assetId } = options;
   const metadataUrl = options.metadataUrl ?? `/media/${assetId}/metadata.json`;
   const apiOrigin =
     options.apiOrigin ?? (typeof window !== "undefined" ? window.location.origin : "");
 
-  const baseSegmentUrl = encrypted ? `/_assets/${assetId}` : `/media/${assetId}`;
-  const fetchCredentials = encrypted ? ("include" as RequestCredentials) : undefined;
-
-  const getDecrypt = (client: MediaPlayer) =>
-    encrypted
-      ? (buf: ArrayBuffer) => Promise.resolve(client.decryptSegment(buf) as ArrayBuffer)
-      : (options.decrypt ?? DEFAULT_DECRYPT);
-
-  let decrypt: (buf: ArrayBuffer) => Promise<ArrayBuffer> = DEFAULT_DECRYPT;
+  const baseSegmentUrl = `/_assets/${assetId}`;
+  const fetchCredentials: RequestCredentials = "include";
 
   const playerRef = shallowRef<MediaPlayer | null>(null);
   const playerReady = ref(false);
@@ -145,7 +133,6 @@ export function useMediaPlayer(
       if (!offscreen) return console.error("Failed to transfer control to offscreen");
       client.initCanvas(offscreen);
       playerRef.value = client;
-      decrypt = getDecrypt(client);
     } catch (e) {
       console.error("Media client init failed:", e);
     }
@@ -202,9 +189,7 @@ export function useMediaPlayer(
       const res = await fetch(url, { signal: abort.signal, credentials: fetchCredentials });
       if (!res.ok) throw new Error("Video chunk failed");
       const buf = await res.arrayBuffer();
-      if (abort.signal.aborted) return;
-      const decrypted = await decrypt(buf);
-      if (!abort.signal.aborted) feedVideoSegment(decrypted);
+      if (!abort.signal.aborted) feedVideoSegment(buf);
       if (videoSegIdx.value === idx) videoSegIdx.value++;
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -227,9 +212,7 @@ export function useMediaPlayer(
       const res = await fetch(url, { signal: abort.signal, credentials: fetchCredentials });
       if (!res.ok) throw new Error("Audio chunk failed");
       const buf = await res.arrayBuffer();
-      if (abort.signal.aborted) return;
-      const decrypted = await decrypt(buf);
-      if (!abort.signal.aborted) feedAudioSegment(decrypted);
+      if (!abort.signal.aborted) feedAudioSegment(buf);
       if (audioSegIdx.value === idx) audioSegIdx.value++;
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -264,13 +247,11 @@ export function useMediaPlayer(
     }
     const client = playerRef.value;
     if (!client) return;
-    if (encrypted) {
-      try {
-        await client.handshake(apiOrigin);
-      } catch (e) {
-        console.error("Handshake failed", e);
-        return;
-      }
+    try {
+      await client.handshake(apiOrigin);
+    } catch (e) {
+      console.error("Handshake failed", e);
+      return;
     }
     const meta = await loadMetadata();
     if (!meta) return;
@@ -280,12 +261,8 @@ export function useMediaPlayer(
         fetch(`${baseSegmentUrl}/${meta.audio.initUrl}`, { credentials: fetchCredentials }),
       ]);
       const [vInit, aInit] = await Promise.all([vRes.arrayBuffer(), aRes.arrayBuffer()]);
-      const [decryptedVideoInit, decryptedAudioInit] = await Promise.all([
-        decrypt(vInit),
-        decrypt(aInit),
-      ]);
-      initVideo(decryptedVideoInit);
-      initAudio(decryptedAudioInit);
+      initVideo(vInit);
+      initAudio(aInit);
       hasInitialized.value = true;
     } catch (e) {
       console.error("Init failed", e);

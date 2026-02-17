@@ -9,17 +9,12 @@ import VideoProgress from "./video-progress.vue";
 import VideoSpinner from "./video-spinner.vue";
 import VideoVolumeSlider from "./video-volume-slider.vue";
 
-const props = withDefaults(
-  defineProps<{
-    assetId: string;
-    metadataUrl?: string;
-    /** When true, use encrypted /_assets endpoint with handshake. */
-    encrypted?: boolean;
-    /** Base URL for handshake. Defaults to window.location.origin. */
-    apiOrigin?: string;
-  }>(),
-  { encrypted: false },
-);
+const props = defineProps<{
+  assetId: string;
+  metadataUrl?: string;
+  /** Base URL for handshake. Defaults to window.location.origin. */
+  apiOrigin?: string;
+}>();
 
 const canvasRef = useTemplateRef("canvasRef");
 const containerRef = useTemplateRef("containerRef");
@@ -44,7 +39,6 @@ const {
 } = useMediaPlayer(canvasRef, containerRef, {
   assetId: props.assetId,
   metadataUrl: props.metadataUrl,
-  encrypted: props.encrypted,
   apiOrigin: props.apiOrigin,
 });
 

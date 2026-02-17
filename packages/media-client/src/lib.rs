@@ -7,6 +7,7 @@ mod listeners;
 mod video;
 
 use audio::AudioPlayer;
+use js_sys::ArrayBuffer;
 use std::cell::RefCell;
 use std::rc::Rc;
 use video::VideoPlayer;
@@ -16,7 +17,7 @@ use web_sys::OffscreenCanvas;
 
 /// Main-thread player: holds audio and video players plus current time.
 /// Audio pipeline (AudioContext, decoder) runs here; worker only receives SET_AUDIO_BUFFERED_END.
-/// Holds the derived secret key (32 bytes) after handshake when using encrypted mode.
+/// Holds the derived secret key (32 bytes) after handshake. Buffers are decrypted internally; never exposed to JS.
 #[wasm_bindgen]
 pub struct MediaPlayer {
     video: VideoPlayer,
@@ -106,28 +107,34 @@ impl MediaPlayer {
         self.audio.seek(time);
     }
 
-    /// Send video init segment (buffer is transferred).
+    /// Send video init segment. Encrypted buffer is decrypted internally before transfer to worker.
     #[wasm_bindgen(js_name = "initVideo")]
-    pub fn init_video(&self, buffer: JsValue) -> Result<(), JsValue> {
-        self.video.send_video_init(buffer)
+    pub fn init_video(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
+        self.video.send_video_init(decrypted)
     }
 
-    /// Send one video media segment (buffer is transferred).
+    /// Send one video media segment. Encrypted buffer is decrypted internally before transfer to worker.
     #[wasm_bindgen(js_name = "feedVideoSegment")]
-    pub fn feed_video_segment(&self, buffer: JsValue) -> Result<(), JsValue> {
-        self.video.send_video_segment(buffer)
+    pub fn feed_video_segment(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
+        self.video.send_video_segment(decrypted)
     }
 
-    /// Initialize audio on main thread (AudioContext cannot be created in worker). Buffer is copied, not transferred.
+    /// Initialize audio on main thread (AudioContext cannot be created in worker).
+    /// Encrypted buffer is decrypted internally before parsing.
     #[wasm_bindgen(js_name = "initAudio")]
-    pub fn init_audio(&self, buffer: JsValue) -> Result<(), JsValue> {
-        self.audio.init(buffer, self.current_time.clone())
+    pub fn init_audio(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
+        self.audio.init(decrypted, self.current_time.clone())
     }
 
     /// Feed one audio media segment; decode and schedule on main thread, post SET_AUDIO_BUFFERED_END to worker.
+    /// Encrypted buffer is decrypted internally.
     #[wasm_bindgen(js_name = "feedAudioSegment")]
-    pub fn feed_audio_segment(&self, buffer: JsValue) -> Result<(), JsValue> {
-        self.audio.feed_segment(buffer, &self.video)
+    pub fn feed_audio_segment(&self, buffer: ArrayBuffer) -> Result<(), JsValue> {
+        let decrypted = Self::decrypt_buffer(buffer, &self.secret_key)?;
+        self.audio.feed_segment(decrypted, &self.video)
     }
 
     /// Get the latest audio buffered end (seconds) from the main-thread audio pipeline.
@@ -148,7 +155,26 @@ impl MediaPlayer {
         self.audio.set_muted(muted);
     }
 
-    /// Handshake for encrypted mode: GET /_init (salt binary), GET /_session (sessionId),
+    /// Decrypt sealed buffer; returns ArrayBuffer as JsValue for downstream use.
+    fn decrypt_buffer(
+        buffer: ArrayBuffer,
+        secret_key: &Rc<RefCell<Option<[u8; 32]>>>,
+    ) -> Result<JsValue, JsValue> {
+        let arr = js_sys::Uint8Array::new(buffer.as_ref());
+        let len = arr.byte_length() as usize;
+        let mut bytes = vec![0u8; len];
+        arr.copy_to(&mut bytes[..]);
+        let key = secret_key
+            .borrow()
+            .ok_or_else(|| JsValue::from_str("handshake required"))?;
+        let decrypted = media_core::secret::open_sealed_data(&bytes, &key)
+            .ok_or_else(|| JsValue::from_str("decryption failed"))?;
+        let out = js_sys::Uint8Array::new_with_length(decrypted.len() as u32);
+        out.copy_from(&decrypted);
+        Ok(out.buffer().into())
+    }
+
+    /// Handshake: GET /media/init (salt binary), GET /media/session (sessionId),
     /// derive key, store only the key, discard sessionId and salt.
     #[wasm_bindgen(js_name = "handshake")]
     pub fn handshake(&self, base_url: &str) -> js_sys::Promise {
@@ -156,15 +182,15 @@ impl MediaPlayer {
         let secret_key = Rc::clone(&self.secret_key);
         future_to_promise(async move {
             let client = reqwest::Client::new();
-            let init_url = format!("{}/_init", base);
-            let session_url = format!("{}/_session", base);
+            let init_url = format!("{}/media/init", base);
+            let session_url = format!("{}/media/session", base);
             let init_res = client
                 .get(&init_url)
                 .send()
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             if !init_res.status().is_success() {
-                return Err(JsValue::from_str("handshake: /_init failed"));
+                return Err(JsValue::from_str("handshake: /media/init failed"));
             }
             let salt = init_res
                 .bytes()
@@ -176,7 +202,7 @@ impl MediaPlayer {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             if !session_res.status().is_success() {
-                return Err(JsValue::from_str("handshake: /_session failed"));
+                return Err(JsValue::from_str("handshake: /media/session failed"));
             }
             let session_id = session_res
                 .text()
@@ -192,28 +218,6 @@ impl MediaPlayer {
             *secret_key.borrow_mut() = Some(key);
             Ok(JsValue::undefined())
         })
-    }
-
-    /// Decrypt a sealed WebP segment. Returns raw bytes as ArrayBuffer.
-    /// Requires prior handshake. Throws if decryption fails.
-    #[wasm_bindgen(js_name = "decryptSegment")]
-    pub fn decrypt_segment(&self, encrypted: JsValue) -> Result<JsValue, JsValue> {
-        let buffer = encrypted
-            .dyn_into::<js_sys::ArrayBuffer>()
-            .map_err(|_| JsValue::from_str("decryptSegment: expected ArrayBuffer"))?;
-        let arr = js_sys::Uint8Array::new(&buffer);
-        let len = arr.byte_length() as usize;
-        let mut bytes = vec![0u8; len];
-        arr.copy_to(&mut bytes[..]);
-        let key = self
-            .secret_key
-            .borrow()
-            .ok_or_else(|| JsValue::from_str("decryptSegment: no key (call handshake first)"))?;
-        let decrypted = media_core::secret::open_sealed_data(&bytes, &key)
-            .ok_or_else(|| JsValue::from_str("decryptSegment: decryption failed"))?;
-        let out = js_sys::Uint8Array::new_with_length(decrypted.len() as u32);
-        out.copy_from(&decrypted);
-        Ok(out.buffer().into())
     }
 
     /// Terminate the worker and clear state. Call when tearing down the player.
