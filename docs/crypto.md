@@ -1,5 +1,7 @@
 # The Full Encryption & Steganography Pipeline
 
+See `docs/architecture.md` for package roles and data flow.
+
 The process is divided into the Sender (Server) and the Receiver (Client), with a cryptographic handshake at the start.
 
 ## 1. The Handshake (Burn-Once-Dest-Check)

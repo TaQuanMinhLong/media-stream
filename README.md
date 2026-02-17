@@ -3,7 +3,10 @@
 A monorepo for experimenting with high-performance media playback in the browser.\
 It combines Rust (compiled to WebAssembly) for low-level media processing with a Bun-powered TypeScript/Vue client.
 
-Documentation: `docs/crypto.md` — handshake flow, sealed WebP format, and server streaming notes.
+Documentation:
+
+* `docs/crypto.md` — handshake flow, sealed WebP format, server streaming
+* `docs/architecture.md` — package roles, thread model, data flow
 
 ### Project structure
 
@@ -14,7 +17,7 @@ Documentation: `docs/crypto.md` — handshake flow, sealed WebP format, and serv
   * `services/client`: Web client (Vue + TypeScript, powered by Bun)
   * `services/server`: Backend / API (Bun)
 * **packages/**
-  * `packages/media-core`: Core Rust crate with media primitives and crypto (seal/open, derive_key)
+  * `packages/media-core`: Core Rust crate with media primitives and crypto (seal/open, derive\_key)
   * `packages/media-client`: Rust crate compiled to WASM for main-thread usage (`@media-stream/client`)
   * `packages/media-worker`: Rust crate compiled to WASM for worker-thread usage (`@media-stream/worker`)
   * `packages/media-secret`: NAPI addon for server-side encryption (`@media-stream/secret`)
@@ -53,7 +56,7 @@ This project uses a `Justfile` at the root as the main entrypoint for common tas
 * **Build client WASM package**
 
   ```bash
-  just build-client
+  just build-wasm-client
   ```
 
   Builds `packages/media-client` with `wasm-pack` for the web target and patches its npm name to `@media-stream/client`.
@@ -61,18 +64,18 @@ This project uses a `Justfile` at the root as the main entrypoint for common tas
 * **Build worker WASM package**
 
   ```bash
-  just build-worker
+  just build-wasm-worker
   ```
 
   Builds `packages/media-worker` with `wasm-pack` for the web target and patches its npm name to `@media-stream/worker`.
 
-* **Build all WASM artifacts + install deps**
+* **Build all WASM artifacts**
 
   ```bash
   just build-wasm
   ```
 
-  Runs `build-client`, `build-worker`, and `install-deps`.
+  Runs `build-wasm-client` and `build-wasm-worker`.
 
 * **Check WASM crates with clippy (wasm32 target)**
 
@@ -89,7 +92,7 @@ This project uses a `Justfile` at the root as the main entrypoint for common tas
 * **Run server crypto tests** (sealData/openSealedData, streaming)
 
   ```bash
-  bun run --cwd services/server test
+  just test-server
   ```
 
 * **Format code (Rust + client)**
@@ -147,8 +150,7 @@ All of these commands must be run from the repo root.
 4. (Optional) **Run tests / checks**
 
    ```bash
-   just test-core
-   bun run --cwd services/server test
+   just test
    just check
    ```
 
